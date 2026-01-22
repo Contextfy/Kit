@@ -1,0 +1,16 @@
+[package]
+name = "contextfy-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "contextfy"
+path = "src/main.rs"
+
+[dependencies]
+contextfy-core = { path = "../core" }
+clap = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }

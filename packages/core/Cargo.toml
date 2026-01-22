@@ -1,0 +1,17 @@
+[package]
+name = "contextfy-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# lancedb = { workspace = true }
+# arrow = { workspace = true }
+pulldown-cmark = { workspace = true }
+uuid = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }

@@ -1,0 +1,19 @@
+[package]
+name = "contextfy-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "contextfy-server"
+path = "src/main.rs"
+
+[dependencies]
+contextfy-core = { path = "../core" }
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tower = { workspace = true }
+tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }

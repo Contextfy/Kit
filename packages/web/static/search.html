@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search - Contextfy Kit</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+        }
+        .header h1 {
+            font-size: 1.8rem;
+            color: #333;
+        }
+        .header a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        .search-box {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+        .search-input {
+            width: 100%;
+            padding: 16px;
+            font-size: 1rem;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            outline: none;
+        }
+        .search-input:focus {
+            border-color: #667eea;
+        }
+        .search-btn {
+            width: 100%;
+            padding: 14px;
+            font-size: 1rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-top: 12px;
+            transition: transform 0.2s;
+        }
+        .search-btn:hover {
+            transform: translateY(-2px);
+        }
+        .results {
+            display: none;
+        }
+        .results.active {
+            display: block;
+        }
+        .result-card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 16px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+            cursor: pointer;
+            transition: box-shadow 0.2s;
+        }
+        .result-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .result-title {
+            font-size: 1.2rem;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        .result-id {
+            font-size: 0.85rem;
+            color: #999;
+            margin-bottom: 8px;
+        }
+        .result-summary {
+            color: #666;
+            line-height: 1.6;
+        }
+        .no-results {
+            text-align: center;
+            color: #999;
+            padding: 40px;
+        }
+        .loading {
+            text-align: center;
+            color: #667eea;
+            padding: 40px;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Search</h1>
+            <a href="/">← Back</a>
+        </div>
+        
+        <div class="search-box">
+            <input type="text" class="search-input" id="searchInput" placeholder="Enter your search query...">
+            <button class="search-btn" onclick="performSearch()">Search</button>
+        </div>
+        
+        <div id="loading" class="loading hidden">Searching...</div>
+        <div id="results" class="results"></div>
+        <div id="noResults" class="no-results hidden">No results found</div>
+    </div>
+
+    <script>
+        async function performSearch() {
+            const query = document.getElementById('searchInput').value.trim();
+            
+            if (!query) {
+                alert('Please enter a search query');
+                return;
+            }
+
+            const loading = document.getElementById('loading');
+            const results = document.getElementById('results');
+            const noResults = document.getElementById('noResults');
+            
+            loading.classList.remove('hidden');
+            results.classList.remove('active');
+            noResults.classList.add('hidden');
+            results.innerHTML = '';
+
+            try {
+                const response = await fetch(`http://127.0.0.1:3000/api/search?q=${encodeURIComponent(query)}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                loading.classList.add('hidden');
+                results.classList.add('active');
+                
+                if (data.results && data.results.length > 0) {
+                    data.results.forEach(result => {
+                        const card = document.createElement('div');
+                        card.className = 'result-card';
+                        card.onclick = () => showDetails(result.id);
+                        card.innerHTML = `
+                            <div class="result-id">ID: ${result.id}</div>
+                            <div class="result-title">${escapeHtml(result.title)}</div>
+                            <div class="result-summary">${escapeHtml(result.summary)}</div>
+                        `;
+                        results.appendChild(card);
+                    });
+                } else {
+                    noResults.classList.remove('hidden');
+                }
+            } catch (error) {
+                loading.classList.add('hidden');
+                alert(`Search failed: ${error.message}`);
+            }
+        }
+
+        async function showDetails(id) {
+            try {
+                const response = await fetch(`http://127.0.0.1:3000/api/document/${id}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                const content = `# ${escapeHtml(data.title)}\n\n${escapeHtml(data.content)}`;
+                
+                const newWindow = window.open('', '_blank');
+                newWindow.document.write(`
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="UTF-8">
+                        <title>${escapeHtml(data.title)} - Contextfy</title>
+                        <style>
+                            body {
+                                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                                max-width: 800px;
+                                margin: 40px auto;
+                                padding: 20px;
+                                line-height: 1.6;
+                            }
+                            h1 {
+                                color: #333;
+                                margin-bottom: 24px;
+                            }
+                            pre {
+                                background: #f5f5f5;
+                                padding: 16px;
+                                border-radius: 6px;
+                                overflow-x: auto;
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <h1>${escapeHtml(data.title)}</h1>
+                        <pre>${escapeHtml(data.content)}</pre>
+                    </body>
+                    </html>
+                `);
+                newWindow.document.close();
+            } catch (error) {
+                alert(`Failed to load details: ${error.message}`);
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                performSearch();
+            }
+        });
+    </script>
+</body>
+</html>
