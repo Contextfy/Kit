@@ -172,11 +172,46 @@ export CLAUDE_SYSTEM_PROMPT=$(cat bedrock-skills.xml)
 
 ## 🤝 贡献指南
 
-欢迎贡献！请参考以下资源：
+欢迎贡献！我们欢迎任何形式的贡献，包括代码、文档、Bug 报告和功能建议。
 
-- [产品需求文档 (PRD)](./docs/PRD.md)
-- [系统架构文档](./docs/Architecture.md)
-- [MVP 规划](./docs/MVP.md)
+### 📚 文档索引
+
+#### 核心文档
+- [CONTRIBUTING.md](./CONTRIBUTING.md) - 贡献指南与流程
+- [DEVELOPMENT.md](./docs/DEVELOPMENT.md) - 开发指南与架构
+- [ISSUE_WORKFLOW.md](./docs/ISSUE_WORKFLOW.md) - Issue 管理与协作流程
+
+#### 产品与设计
+- [PRD - 产品需求文档](./docs/PRD.md)
+- [Architecture - 系统架构文档](./docs/Architecture.md)
+- [MVP - MVP 规划](./docs/MVP.md)
+- [QuickStart - 快速入门](./docs/QuickStart.md)
+
+### 🚀 快速贡献
+
+#### 方式一：接手开发任务
+
+1. 访问 [Issues 页面](https://github.com/Contextfy/Kit/issues)
+2. 筛选标记为 `status:ready` 的 Issue
+3. 选择你感兴趣的任务并评论认领
+4. 按照 Issue 中的要求开发并提交 PR
+
+详见：[ISSUE_WORKFLOW.md](./docs/ISSUE_WORKFLOW.md)
+
+#### 方式二：报告 Bug 或提建议
+
+使用 [Issue 模板](.github/ISSUE_TEMPLATE/) 创建 Issue：
+- 🐛 [Bug Report](.github/ISSUE_TEMPLATE/bug_report.md)
+- 🚀 [Feature Request](.github/ISSUE_TEMPLATE/feature_request.md)
+- 🤔 [Discussion](.github/ISSUE_TEMPLATE/discussion.md)
+- 📚 [Documentation](.github/ISSUE_TEMPLATE/documentation.md)
+
+### 💻 开发指南
+
+详细的开发流程、代码规范、测试要求请参考：
+
+- [DEVELOPMENT.md](./docs/DEVELOPMENT.md) - 开发环境搭建、架构说明、调试技巧
+- [CONTRIBUTING.md](./CONTRIBUTING.md) - 代码规范、提交规范、PR 流程
 
 ## 📞 交流
 
