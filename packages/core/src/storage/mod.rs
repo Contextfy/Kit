@@ -40,7 +40,10 @@ impl KnowledgeStore {
                 let content = fs::read_to_string(&path)?;
                 if let Ok(record) = serde_json::from_str::<KnowledgeRecord>(&content) {
                     if record.title.to_lowercase().contains(&query.to_lowercase())
-                        || record.summary.to_lowercase().contains(&query.to_lowercase())
+                        || record
+                            .summary
+                            .to_lowercase()
+                            .contains(&query.to_lowercase())
                     {
                         records.push(record);
                     }
@@ -79,10 +82,7 @@ impl KnowledgeStore {
         };
 
         let json = serde_json::to_string_pretty(&record)?;
-        fs::write(
-            Path::new(&self.data_dir).join(format!("{}.json", id)),
-            json,
-        )?;
+        fs::write(Path::new(&self.data_dir).join(format!("{}.json", id)), json)?;
 
         Ok(id)
     }
