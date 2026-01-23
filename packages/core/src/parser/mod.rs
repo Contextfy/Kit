@@ -12,18 +12,23 @@ pub struct ParsedDoc {
     pub content: String,
 }
 
-/// 表示一个按 H2 标题切片后的文档片段
+/// 表示一个按 H2 标题切片后的文档片段（零拷贝版本）
 ///
 /// # 字段
 ///
-/// * `section_title` - H2 标题文本
-/// * `content` - 该 H2 下的完整内容（从 H2 开始到下一个 H2 之前）
-/// * `parent_doc_title` - 父文档的 H1 标题
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SlicedDoc {
+/// * `section_title` - H2 标题文本（拥有所有权）
+/// * `content` - 该 H2 下的完整内容（从 H2 开始到下一个 H2 之前，借用切片）
+/// * `parent_doc_title` - 父文档的 H1 标题（借用切片）
+///
+/// # 零拷贝设计
+///
+/// `content` 和 `parent_doc_title` 使用借用切片，避免复制数据。
+/// 只有 `section_title` 拥有所有权，因为它需要从解析的多个事件中拼接。
+#[derive(Debug, Clone)]
+pub struct SlicedDoc<'a> {
     pub section_title: String,
-    pub content: String,
-    pub parent_doc_title: String,
+    pub content: &'a str,
+    pub parent_doc_title: &'a str,
 }
 
 pub fn parse_markdown(file_path: &str) -> Result<ParsedDoc> {
@@ -88,7 +93,7 @@ pub fn parse_markdown(file_path: &str) -> Result<ParsedDoc> {
 /// - 忽略第一个 H2 标题之前的所有内容
 /// - H3/H4 等子标题作为当前 H2 片段的内容的一部分
 /// - 使用 AST 解析，代码块中的 `##` 不会被误认为 H2 标题
-/// - 零拷贝实现，使用 `pulldown-cmark` 的 `into_offset_iter()`
+/// - 零拷贝实现：`content` 和 `parent_doc_title` 使用借用切片
 ///
 /// # 示例
 ///
@@ -98,7 +103,7 @@ pub fn parse_markdown(file_path: &str) -> Result<ParsedDoc> {
 /// assert_eq!(slices.len(), 2);
 /// assert_eq!(slices[0].section_title, "Section 1");
 /// ```
-pub fn slice_by_headers(content: &str, parent_title: &str) -> Vec<SlicedDoc> {
+pub fn slice_by_headers<'a>(content: &'a str, parent_title: &'a str) -> Vec<SlicedDoc<'a>> {
     let mut slices = Vec::new();
 
     let parser = Parser::new(content);
@@ -118,10 +123,16 @@ pub fn slice_by_headers(content: &str, parent_title: &str) -> Vec<SlicedDoc> {
                     h2_titles.push(title);
                 }
             }
-            Event::Text(text) => {
-                // 如果正在解析 H2 标题，追加文本到当前标题
+            Event::Text(text) | Event::Code(text) => {
+                // 处理文本和行内代码
                 if let Some(title) = &mut current_h2_title {
                     title.push_str(&text);
+                }
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                // 处理换行，转换为空格
+                if let Some(title) = &mut current_h2_title {
+                    title.push(' ');
                 }
             }
             _ => {}
@@ -143,13 +154,14 @@ pub fn slice_by_headers(content: &str, parent_title: &str) -> Vec<SlicedDoc> {
             content.len()
         };
 
-        let slice_content = content[start_idx..end_idx].to_string();
+        // 零拷贝：直接借用原始字符串的切片
+        let slice_content = &content[start_idx..end_idx];
         let section_title = h2_titles.get(i).cloned().unwrap_or_default();
 
         slices.push(SlicedDoc {
             section_title,
             content: slice_content,
-            parent_doc_title: parent_title.to_string(),
+            parent_doc_title: parent_title,
         });
     }
 
@@ -312,4 +324,34 @@ Some content.
         assert!(slices[0].content.contains("Content for section one"));
         assert!(slices[1].content.contains("Content for section two"));
     }
+}
+
+#[test]
+fn test_edge_cases_empty_h2() {
+    // 测试空的 H2 标题
+    let content = "# Parent\n\n##\n\nContent after empty header.";
+    let slices = slice_by_headers(content, "Parent");
+    assert_eq!(slices.len(), 1);
+    // 空标题应该被捕获为空字符串
+    assert_eq!(slices[0].section_title, "");
+}
+
+#[test]
+fn test_edge_cases_h2_at_eof() {
+    // 测试 H2 后面直接 EOF
+    let content = "# Parent\n\n## Section One";
+    let slices = slice_by_headers(content, "Parent");
+    assert_eq!(slices.len(), 1);
+    assert_eq!(slices[0].section_title, "Section One");
+}
+
+#[test]
+fn test_edge_cases_consecutive_h2() {
+    // 测试连续的 H2
+    let content = "# Parent\n\n## First\n## Second\n## Third\n\nContent.";
+    let slices = slice_by_headers(content, "Parent");
+    assert_eq!(slices.len(), 3);
+    assert_eq!(slices[0].section_title, "First");
+    assert_eq!(slices[1].section_title, "Second");
+    assert_eq!(slices[2].section_title, "Third");
 }
