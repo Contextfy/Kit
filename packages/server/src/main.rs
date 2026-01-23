@@ -6,8 +6,8 @@ use axum::{
 use contextfy_core::{KnowledgeStore, Retriever};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tower_http::services::ServeDir;
 use tokio::sync::Mutex;
+use tower_http::services::ServeDir;
 
 #[derive(Debug, Deserialize)]
 struct SearchQuery {
@@ -38,7 +38,7 @@ type AppState = Arc<Mutex<KnowledgeStore>>;
 #[tokio::main]
 async fn main() {
     let store = Arc::new(Mutex::new(KnowledgeStore::new(".contextfy/data").unwrap()));
-    
+
     let app = Router::new()
         .route("/api/search", get(search_handler))
         .route("/api/document/:id", get(document_handler))
@@ -46,7 +46,9 @@ async fn main() {
         .route("/health", get(health_handler))
         .with_state(store);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
     println!("Server listening on http://127.0.0.1:3000");
     println!("Web UI available at http://127.0.0.1:3000/");
     let _ = axum::serve(listener, app).await;
@@ -64,7 +66,7 @@ async fn search_handler(
 
     let guard = store.lock().await;
     let retriever = Retriever::new(&*guard);
-    
+
     let results = retriever.scout(&params.q).await;
 
     match results {
@@ -78,7 +80,9 @@ async fn search_handler(
                 })
                 .collect();
 
-            Json(SearchResponse { results: search_results })
+            Json(SearchResponse {
+                results: search_results,
+            })
         }
         Err(e) => {
             eprintln!("Search error: {}", e);
@@ -95,7 +99,7 @@ async fn document_handler(
 
     let guard = store.lock().await;
     let retriever = Retriever::new(&*guard);
-    
+
     let result = retriever.inspect(&doc_id).await;
 
     match result {

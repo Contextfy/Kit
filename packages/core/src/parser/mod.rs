@@ -104,17 +104,24 @@ pub fn slice_by_headers(content: &str, parent_title: &str) -> Vec<SlicedDoc> {
     let parser = Parser::new(content);
     let mut h2_start_indices: Vec<usize> = Vec::new();
     let mut h2_titles: Vec<String> = Vec::new();
+    let mut current_h2_title: Option<String> = None;
 
     // 第一遍遍历：收集所有 H2 标题的位置和文本
     for (event, range) in parser.into_offset_iter() {
         match event {
             Event::Start(Tag::Heading(HeadingLevel::H2, ..)) => {
                 h2_start_indices.push(range.start);
+                current_h2_title = Some(String::new());
+            }
+            Event::End(Tag::Heading(HeadingLevel::H2, ..)) => {
+                if let Some(title) = current_h2_title.take() {
+                    h2_titles.push(title);
+                }
             }
             Event::Text(text) => {
-                // 如果刚刚遇到了 H2，这是它的标题文本
-                if !h2_start_indices.is_empty() && h2_titles.len() < h2_start_indices.len() {
-                    h2_titles.push(text.to_string());
+                // 如果正在解析 H2 标题，追加文本到当前标题
+                if let Some(title) = &mut current_h2_title {
+                    title.push_str(&text);
                 }
             }
             _ => {}
@@ -291,5 +298,18 @@ Some content.
         assert_eq!(slices[1].section_title, "功能特性");
         assert!(slices[0].content.contains("中文和 Emoji"));
         assert!(slices[1].content.contains("✨"));
+    }
+
+    #[test]
+    fn test_slice_inline_formatting() {
+        let content = "# Parent Doc\n\n## Section **One**\n\nContent for section one.\n\n## Section *Two*\n\nContent for section two.\n";
+
+        let slices = slice_by_headers(content, "Parent Doc");
+        assert_eq!(slices.len(), 2);
+        // 应该包含完整的内联格式
+        assert_eq!(slices[0].section_title, "Section One");
+        assert_eq!(slices[1].section_title, "Section Two");
+        assert!(slices[0].content.contains("Content for section one"));
+        assert!(slices[1].content.contains("Content for section two"));
     }
 }
