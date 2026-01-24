@@ -95,7 +95,7 @@ Creates a new item with the specified name.
         Commands::Build => {
             println!("Building Contextfy knowledge base...");
 
-            let store = KnowledgeStore::new(".contextfy/data")?;
+            let store = KnowledgeStore::new(".contextfy/data").await?;
 
             let examples_dir = Path::new("docs/examples");
             if !examples_dir.exists() {
@@ -135,7 +135,7 @@ Creates a new item with the specified name.
         Commands::Scout { query } => {
             println!("Scouting for: {}", query);
 
-            let store = KnowledgeStore::new(".contextfy/data")?;
+            let store = KnowledgeStore::new(".contextfy/data").await?;
             let retriever = Retriever::new(&store);
 
             match retriever.scout(&query).await {

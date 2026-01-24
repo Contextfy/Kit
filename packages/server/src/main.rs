@@ -37,7 +37,9 @@ type AppState = Arc<Mutex<KnowledgeStore>>;
 
 #[tokio::main]
 async fn main() {
-    let store = Arc::new(Mutex::new(KnowledgeStore::new(".contextfy/data").unwrap()));
+    let store = Arc::new(Mutex::new(
+        KnowledgeStore::new(".contextfy/data").await.unwrap(),
+    ));
 
     let app = Router::new()
         .route("/api/search", get(search_handler))
