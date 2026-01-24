@@ -112,8 +112,16 @@ Creates a new item with the specified name.
 
                     match parse_markdown(file_path) {
                         Ok(doc) => {
-                            let id = store.add(&doc).await?;
-                            println!("  → Stored: {} (ID: {})", doc.title, id);
+                            let ids = store.add(&doc).await?;
+                            // 显示存储结果：如果有切片，显示切片数量；否则显示文档 ID
+                            if doc.sections.is_empty() {
+                                println!("  → Stored: {} (ID: {})", doc.title, ids[0]);
+                            } else {
+                                println!("  → Stored: {} ({} slices)", doc.title, ids.len());
+                                for (i, id) in ids.iter().enumerate() {
+                                    println!("      [{}] Slice ID: {}", i + 1, id);
+                                }
+                            }
                         }
                         Err(e) => {
                             eprintln!("  ✗ Failed to parse {}: {}", file_path, e);

@@ -45,5 +45,8 @@ thiserror = "1.0"
 # UUID
 uuid = { version = "1.6", features = ["v4", "serde"] }
 
+# Testing
+tempfile = "3.8"
+
 # Pin chrono to avoid arrow conflict
 chrono = "=0.4.30"
