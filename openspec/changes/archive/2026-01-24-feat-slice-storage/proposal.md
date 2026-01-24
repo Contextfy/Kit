@@ -1,17 +1,17 @@
-# 变更：存储文档切片为独立记录
+# Change: Store Document Slices as Independent Records
 
-## 为什么
+## Why
 
-在 Issue #1 (feat-markdown-slicing) 中，我们已经实现了基于 H2 标题的语义切片功能 `slice_by_headers()`，它返回 `Vec<SlicedDoc>`。然而，当前的存储系统存在以下问题：
+In Issue #1 (feat-markdown-slicing), we implemented H2 header-based semantic slicing functionality with `slice_by_headers()` returning `Vec<SlicedDoc>`. However, the current storage system has the following issues:
 
-1. **`ParsedDoc` 未携带切片信息**：解析后的文档结构体没有包含切片结果，导致切片功能无法与存储层衔接
-2. **存储粒度过粗**：整个文档作为单个 JSON 文件存储，无法实现细粒度的块级检索
-3. **缺少源路径追踪**：存储的记录没有 `source_path` 字段，无法追溯到原始文件路径
-4. **不符合分层检索模型**：规格定义的父子关系分层检索无法在当前扁平化存储模型中实现
+1. **ParsedDoc does not carry slice information**: The parsed document structure does not include slice results, preventing the slicing functionality from integrating with the storage layer
+2. **Storage granularity too coarse**: Entire documents are stored as single JSON files, unable to achieve fine-grained block-level retrieval
+3. **Missing source path tracking**: Stored records lack the `source_path` field, making it impossible to trace back to the original file path
+4. **Does not match hierarchical retrieval model**: The parent-child relationship hierarchical retrieval defined in the specification cannot be implemented with the current flat storage model
 
-本次变更旨在打通解析器切片功能和存储层的连接，实现真正的细粒度存储和检索。
+This change aims to connect the parser slicing functionality with the storage layer, enabling true fine-grained storage and retrieval.
 
-## 变更内容
+## What Changes
 
 **Issue #3 边界**：本次变更专注于数据结构更新和存储逻辑修改，严格限制在 Storage 层面
 
