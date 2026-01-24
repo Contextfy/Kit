@@ -99,17 +99,6 @@
       Ok(ids)  // 返回所有切片的 ID
   }
   ```
-- [ ] 2.3 处理生命周期和数据所有权问题
-  - `SlicedDoc.content` 是 `&str`，存储时需要转换为 `String`
-  - 使用 `.to_string()` 复制数据（损失零拷贝优势，但 JSON 序列化不可避免）
-- [ ] 2.4 更新方法签名返回类型
-  - 从 `Result<String>` 改为 `Result<Vec<String>>`（返回所有切片的 ID）
-- [ ] 2.5 修复调用点
-  - CLI 模块中的 `store.add(&doc).await?` 需要适配新的返回类型
-- [ ] 2.6 添加错误处理
-  - 处理空切片、空内容等边界情况
-- [ ] 2.7 编写临时调试日志
-  - 打印存储的切片数量和 ID 列表
 
 **预期产出**:
 - `add()` 方法能将 `ParsedDoc.sections` 扁平化为多条记录
@@ -186,81 +175,6 @@
           assert_eq!(record.source_path, "/fake/path.md");
       }
   }
-  ```
-- [ ] 3.2 编写边界情况测试 `test_add_empty_sections`
-  - 测试 `sections` 为空时的回退逻辑
-  - 确保整个文档作为 1 条记录存储
-- [ ] 3.3 编写鲁棒性测试 `test_storage_robustness` (极端情况)
-  ```rust
-  #[tokio::test]
-  async fn test_storage_robustness() {
-      let temp_dir = tempfile::tempdir().unwrap();
-      let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap()).unwrap();
-
-      // 构造极端数据
-      let mut sections = vec![
-          // Case A: 标题为空，内容包含 Emoji 和特殊符号
-          SlicedDoc {
-              section_title: "".to_string(),
-              content: "🚀 Emoji & \"Quotes\" & \nNewlines".to_string(),
-              parent_doc_title: "Edge Case Doc",
-          },
-          // Case B: 只有标题，内容为空
-          SlicedDoc {
-              section_title: "Empty Content".to_string(),
-              content: "".to_string(),
-              parent_doc_title: "Edge Case Doc",
-          },
-      ];
-
-      // Case C: 大量切片 (模拟长文) - 循环生成 50 个切片
-      for i in 0..50 {
-          sections.push(SlicedDoc {
-              section_title: format!("Section {}", i),
-              content: format!("Content for section {}", i),
-              parent_doc_title: "Edge Case Doc",
-          });
-      }
-
-      let doc = ParsedDoc {
-          path: "C:\\Windows\\System32\\weird_path.md".to_string(), // Windows 路径反斜杠测试
-          title: "Edge Case Doc".to_string(),
-          summary: "".to_string(),
-          content: "".to_string(),
-          sections,
-      };
-
-      // 验证是否能成功写入，不 Panic
-      let ids = store.add(&doc).await.unwrap();
-
-      // 验证 Case C: 确保生成的 ID 数量正确 (2个手动 + 50个循环 = 52)
-      assert_eq!(ids.len(), 52);
-
-      // 验证 JSON 读取回来的数据完整性 (确保特殊字符没有乱码)
-      // 读取第一个文件，反序列化，断言 content == "🚀 Emoji & \"Quotes\" & \nNewlines"
-      let first_record = store.get(&ids[0]).await.unwrap().unwrap();
-      assert_eq!(first_record.content, "🚀 Emoji & \"Quotes\" & \nNewlines");
-      assert_eq!(first_record.source_path, "C:\\Windows\\System32\\weird_path.md");
-  }
-  ```
-- [ ] 3.4 编写端到端集成测试
-  - 使用真实的 markdown 文件
-  - 调用 `parse_markdown()` → `store.add()` → 验证存储结果
-- [ ] 3.5 运行所有测试并确保通过
-  ```bash
-  cargo test -p contextfy-core
-  ```
-- [ ] 3.6 运行代码格式化和静态检查
-  ```bash
-  cargo fmt
-  cargo clippy -p contextfy-core
-  ```
-- [ ] 3.7 手动测试 CLI 流程
-  ```bash
-  cd /home/haotang/my-project/contextfy/Kit
-  cargo build --bin contextfy-cli
-  # 创建测试文档并运行 contextfy build
-  # 检查 .contextfy/data/ 目录中的 JSON 文件数量
   ```
 
 **预期产出**:
