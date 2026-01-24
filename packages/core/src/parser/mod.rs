@@ -1,15 +1,47 @@
 use anyhow::Result;
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag};
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// 解析后的 Markdown 文档
+///
+/// # 字段
+///
+/// * `path` - 原始文件路径
+/// * `title` - 文档标题（通常是 H1 标题或文件名）
+/// * `summary` - 文档摘要（前 200 个字符）
+/// * `content` - 完整的 Markdown 内容
+/// * `sections` - 按 H2 标题切片的片段列表（拥有所有权）
+///
+/// # 所有权设计
+///
+/// 为了简化生命周期管理并避免复杂的借用关系，
+/// `ParsedDoc` 中的 `sections` 拥有数据的所有权（而非借用）。
+///
+/// 权衡：
+/// - ❌ 失去零拷贝优势（需要复制切片数据）
+/// - ✅ 简化 API 和生命周期（ParsedDoc 无需生命周期参数）
+/// - ✅ 更容易序列化和存储（虽然 ParsedDoc 本身不序列化）
+///
+/// 这个选择是基于实用主义的考虑：在存储层（JSON 序列化）零拷贝优势无法体现。
+#[derive(Debug, Clone)]
 pub struct ParsedDoc {
     pub path: String,
     pub title: String,
     pub summary: String,
     pub content: String,
+    pub sections: Vec<SlicedSection>, // 拥有所有权的切片
+}
+
+/// 拥有所有权的文档切片（用于 ParsedDoc）
+///
+/// 与 `SlicedDoc<'a>` 不同，这个结构体拥有所有数据的所有权，
+/// 不需要生命周期参数。
+#[derive(Debug, Clone)]
+pub struct SlicedSection {
+    pub section_title: String,
+    pub content: String,
+    pub parent_doc_title: String,
 }
 
 /// 表示一个按 H2 标题切片后的文档片段（零拷贝版本）
@@ -68,11 +100,24 @@ pub fn parse_markdown(file_path: &str) -> Result<ParsedDoc> {
     let summary = content.chars().take(200).collect::<String>();
     let content_cleaned = content.trim().to_string();
 
+    // 调用零拷贝切片函数，然后将结果转换为拥有所有权的版本
+    // 性能考虑：这里需要复制数据，但权衡是简化了生命周期管理
+    let zero_copy_slices = slice_by_headers(&content_cleaned, &title);
+    let sections: Vec<SlicedSection> = zero_copy_slices
+        .into_iter()
+        .map(|slice| SlicedSection {
+            section_title: slice.section_title,
+            content: slice.content.to_string(), // 借用 → 拥有所有权
+            parent_doc_title: slice.parent_doc_title.to_string(),
+        })
+        .collect();
+
     Ok(ParsedDoc {
         path: file_path.to_string(),
         title,
         summary,
         content: content_cleaned,
+        sections,
     })
 }
 

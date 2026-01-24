@@ -95,7 +95,7 @@ Creates a new item with the specified name.
         Commands::Build => {
             println!("Building Contextfy knowledge base...");
 
-            let store = KnowledgeStore::new(".contextfy/data")?;
+            let store = KnowledgeStore::new(".contextfy/data").await?;
 
             let examples_dir = Path::new("docs/examples");
             if !examples_dir.exists() {
@@ -112,8 +112,16 @@ Creates a new item with the specified name.
 
                     match parse_markdown(file_path) {
                         Ok(doc) => {
-                            let id = store.add(&doc).await?;
-                            println!("  → Stored: {} (ID: {})", doc.title, id);
+                            let ids = store.add(&doc).await?;
+                            // 显示存储结果：如果有切片，显示切片数量；否则显示文档 ID
+                            if doc.sections.is_empty() {
+                                println!("  → Stored: {} (ID: {})", doc.title, ids[0]);
+                            } else {
+                                println!("  → Stored: {} ({} slices)", doc.title, ids.len());
+                                for (i, id) in ids.iter().enumerate() {
+                                    println!("      [{}] Slice ID: {}", i + 1, id);
+                                }
+                            }
                         }
                         Err(e) => {
                             eprintln!("  ✗ Failed to parse {}: {}", file_path, e);
@@ -127,7 +135,7 @@ Creates a new item with the specified name.
         Commands::Scout { query } => {
             println!("Scouting for: {}", query);
 
-            let store = KnowledgeStore::new(".contextfy/data")?;
+            let store = KnowledgeStore::new(".contextfy/data").await?;
             let retriever = Retriever::new(&store);
 
             match retriever.scout(&query).await {
