@@ -15,6 +15,7 @@ use uuid::Uuid;
 ///
 /// * `id` - 记录的唯一标识符（UUID）
 /// * `title` - 记录标题（对于切片文档，这是 H2 标题）
+/// * `parent_doc_title` - 父文档的标题（H1 标题或文件名）
 /// * `summary` - 内容摘要（前 200 个字符）
 /// * `content` - 完整内容
 /// * `source_path` - 原始文件路径，用于追溯源文件
@@ -22,6 +23,7 @@ use uuid::Uuid;
 pub struct KnowledgeRecord {
     pub id: String,
     pub title: String,
+    pub parent_doc_title: String,
     pub summary: String,
     pub content: String,
     pub source_path: String, // 新增字段：记录原始文件路径
@@ -182,6 +184,7 @@ impl KnowledgeStore {
             let record = KnowledgeRecord {
                 id: id.clone(),
                 title: doc.title.clone(),
+                parent_doc_title: doc.title.clone(),
                 summary: doc.summary.clone(),
                 content: doc.content.clone(),
                 source_path: doc.path.clone(),
@@ -252,6 +255,7 @@ impl KnowledgeStore {
                 let record = KnowledgeRecord {
                     id: id.clone(),
                     title: slice.section_title.clone(),
+                    parent_doc_title: slice.parent_doc_title.clone(),
                     summary: slice.content.chars().take(200).collect::<String>(),
                     content: slice.content.clone(),
                     source_path: doc.path.clone(),
