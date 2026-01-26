@@ -10,11 +10,13 @@ use serde::{Deserialize, Serialize};
 ///
 /// * `id` - 记录的唯一标识符
 /// * `title` - 记录标题
+/// * `parent_doc_title` - 父文档的标题
 /// * `summary` - 内容摘要（前 200 个字符）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Brief {
     pub id: String,
     pub title: String,
+    pub parent_doc_title: String,
     pub summary: String,
 }
 
@@ -84,6 +86,7 @@ impl<'a> Retriever<'a> {
             .map(|r| Brief {
                 id: r.id,
                 title: r.title,
+                parent_doc_title: r.parent_doc_title,
                 summary: r.summary,
             })
             .collect())

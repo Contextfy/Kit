@@ -35,7 +35,12 @@ pub async fn scout(query: String) -> Result<()> {
             } else {
                 println!("\nFound {} result(s):", briefs.len());
                 for (i, result) in briefs.iter().enumerate() {
-                    println!("\n[{}] {}", i + 1, result.title);
+                    let display_title = if result.parent_doc_title == result.title {
+                        result.title.clone()
+                    } else {
+                        format!("[{}] {}", result.parent_doc_title, result.title)
+                    };
+                    println!("\n[{}] {}", i + 1, display_title);
                     println!("    ID: {}", result.id);
                     println!("    Summary: {}", result.summary);
                 }
