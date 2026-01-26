@@ -31,6 +31,7 @@ The core engine SHALL store parsed documents and their semantic chunks in a file
 - **则**系统为每个切片创建独立的 `KnowledgeRecord`，每个记录包含：
   - `id`：切片的唯一 UUID
   - `title`：切片的标题（H2 标题）
+  - `parent_doc_title`：父文档的标题（H1 标题或文件名）
   - `summary`：切片内容的前 200 个字符
   - `content`：切片的完整内容
   - `source_path`：原始文档文件路径
@@ -40,7 +41,10 @@ The core engine SHALL store parsed documents and their semantic chunks in a file
 #### Scenario: 存储无切片文档（回退模式）
 - **当**用户将不包含切片的 `ParsedDoc` 添加到知识存储时
 - **则**系统将整个文档作为单条记录存储（向后兼容）
-- **并且**记录包含 `source_path` 字段用于追溯原始文件
+- **并且**记录包含：
+  - `title`：文档的完整标题
+  - `parent_doc_title`：与 `title` 相同（保持一致性）
+  - `source_path` 字段用于追溯原始文件
 
 #### Scenario: 创建新的知识存储
 - **当**用户使用目录路径初始化新的 `KnowledgeStore` 时
@@ -73,15 +77,17 @@ The core engine SHALL provide scout and inspect operations for efficient context
 
 #### Scenario: 侦察相关的文档和块
 - **当**用户使用搜索字符串调用 `scout(query)` 时
-- **则**系统返回 `Brief` 结构体列表，可能包含：
-  - 父文档条目：包含 `id`、`title`、`summary`、`chunk_count`、`is_parent=true`
-  - 子块条目：包含 `id`、`parent_id`、`title`、`summary`、`position`、`is_parent=false`
+- **则**系统返回 `Brief` 结构体列表，每个包含：
+  - `id`：记录的唯一标识符
+  - `title`：记录标题（切片标题或文档标题）
+  - `parent_doc_title`：父文档的标题
+  - `summary`：内容摘要（前 200 个字符）
 
 #### Scenario: 通过 ID 检视块内容
 - **当**用户使用 scout 结果中的子块 UUID 调用 `inspect(id)` 时
 - **则**系统检索并返回：
   - 该块的完整 `content` 字段
-  - 父文档的元数据（`parent_id`、父文档 `title`）
+  - 该块的标题（切片的 section_title 或文档的 title）
 
 #### Scenario: 通过 ID 检视父文档
 - **当**用户使用父文档 UUID 调用 `inspect(id)` 时
@@ -90,6 +96,14 @@ The core engine SHALL provide scout and inspect operations for efficient context
 #### Scenario: 处理无效文档 ID
 - **当**用户使用不存在的 UUID 调用 `inspect(id)` 时
 - **则**系统返回错误，指示未找到文档
+
+#### Scenario: CLI scout 命令显示父文档信息
+- **当**用户执行 CLI scout 命令时
+- **则**系统显示搜索结果，格式为：
+  - `[parent_doc] section_title` - 对于切片文档
+  - `document_title` - 对于非切片文档
+  - `ID: {id}`
+  - `Summary: {summary}`
 
 ### Requirement: Incremental Build Support
 The core engine SHALL track file hashes to skip unchanged documents during rebuild. 核心引擎应跟踪文件哈希，以便在重建时跳过未更改的文档。
