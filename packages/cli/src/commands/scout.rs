@@ -2,8 +2,6 @@ use anyhow::Result;
 use contextfy_core::{KnowledgeStore, Retriever};
 
 pub async fn scout(query: String) -> Result<()> {
-    println!("Scouting for: {}", query);
-
     let store = KnowledgeStore::new(".contextfy/data").await?;
     let retriever = Retriever::new(&store);
 
@@ -21,7 +19,7 @@ pub async fn scout(query: String) -> Result<()> {
             }
         }
         Err(e) => {
-            eprintln!("Error: {}", e);
+            return Err(e.into());
         }
     }
 
