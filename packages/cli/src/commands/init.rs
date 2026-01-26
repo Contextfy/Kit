@@ -1,6 +1,27 @@
 use anyhow::Result;
 use std::fs;
 
+/// 初始化 Contextfy 项目
+///
+/// 创建项目配置文件和示例文档目录结构。
+///
+/// # Arguments
+///
+/// * `template` - 可选的项目模板名称（当前未实现，仅记录）
+///
+/// # Errors
+///
+/// 如果文件创建或目录创建失败，返回错误
+///
+/// # Examples
+///
+/// ```no_run
+/// # use contextfy_cli::commands::init;
+/// # fn main() -> anyhow::Result<()> {
+/// init(None)?;
+/// # Ok(())
+/// # }
+/// ```
 pub fn init(template: Option<String>) -> Result<()> {
     println!("Initializing Contextfy project...");
     if let Some(t) = template {

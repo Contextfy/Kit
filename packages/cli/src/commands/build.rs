@@ -3,6 +3,25 @@ use contextfy_core::{parse_markdown, KnowledgeStore};
 use std::fs;
 use std::path::Path;
 
+/// 构建知识库
+///
+/// 扫描 `docs/examples` 目录，解析 Markdown 文档并存储到知识库中。
+/// 每个文档会被切片并存储为独立的可检索单元。
+///
+/// # Errors
+///
+/// 如果 `docs/examples` 目录不存在或文档解析失败，返回错误
+///
+/// # Examples
+///
+/// ```no_run
+/// # use contextfy_cli::commands::build;
+/// # #[tokio::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// build().await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn build() -> Result<()> {
     let store = KnowledgeStore::new(".contextfy/data").await?;
 
