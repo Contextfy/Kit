@@ -64,7 +64,7 @@ The core engine SHALL provide scout and inspect operations for efficient context
 - **当**用户使用 scout 结果中的子块 UUID 调用 `inspect(id)` 时
 - **则**系统检索并返回：
   - 该块的完整 `content` 字段
-  - `title`：切片标题或文档标题
+  - 该块的标题（切片的 section_title 或文档的 title）
 
 #### Scenario: 通过 ID 检视父文档
 - **当**用户使用父文档 UUID 调用 `inspect(id)` 时
