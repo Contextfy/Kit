@@ -14,7 +14,7 @@
 
 对于一个以函数签名开始的章节：
 
-```markdown
+````markdown
 ## Authentication
 
 ```rust
@@ -25,7 +25,7 @@ pub async fn authenticate(
 ```
 
 To use the API, you need to authenticate...
-```
+````
 
 当前摘要（200 字符）只会包含函数签名的前几行，丢失完整的类型签名和返回类型，这对于开发者理解 API 极不友好。
 
@@ -71,10 +71,10 @@ To use the API, you need to authenticate...
 
 #### 场景 B：以代码块开始
 
-```markdown
+````markdown
 输入："```rust\npub fn foo() -> Bar\n```\n\n一些说明文字..."
 输出："```rust\npub fn foo() -> Bar\n```"
-```
+````
 
 #### 场景 C：无段落分隔
 

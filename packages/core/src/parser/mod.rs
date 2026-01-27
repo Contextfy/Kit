@@ -293,7 +293,10 @@ pub fn parse_markdown(file_path: &str) -> Result<ParsedDoc> {
         path: file_path.to_string(),
         title,
         summary,
-        content: content_cleaned,
+        // 存储原始内容，不进行 trim
+        // 这样 ParsedDoc.content 保存的是完整的原始文档
+        // trim 仅在生成 summary 和 sections 时使用
+        content,
         sections,
     })
 }
