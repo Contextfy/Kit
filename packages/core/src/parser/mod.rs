@@ -3,13 +3,161 @@ use pulldown_cmark::{Event, HeadingLevel, Parser, Tag};
 use std::fs;
 use std::path::Path;
 
+/// 智能提取内容摘要
+///
+/// 提取内容的摘要
+///
+/// 提取逻辑：
+/// 1. 如果以代码块开始（```），包含整个代码块
+/// 2. 查找第一个双换行符（\n\n）作为段落分隔
+/// 3. 硬截断保护：超过 1000 字符强制截断
+/// 4. 回退：无段落分隔时截取前 200 字符
+/// 5. 清理首尾空白
+///
+/// # 性能优化
+///
+/// 如果调用者确保传入**已 trim 的内容**，可以跳过内部 trim，提升性能。
+/// 函数会自动检测是否需要 trim，只在必要时才执行。
+///
+/// # 参数
+///
+/// - `content`: 内容字符串（建议已 trim 以获得最佳性能）
+///
+/// # 返回
+///
+/// 提取的摘要字符串
+pub fn extract_summary(content: &str) -> String {
+    const MAX_SUMMARY_CHARS: usize = 1000;
+    const FALLBACK_CHARS: usize = 200;
+
+    // 性能优化：只在需要时才 trim（避免不必要的遍历）
+    // 如果内容首尾有空白字符，才执行 trim；否则直接使用原内容
+    let content = if content.starts_with(|c: char| c.is_whitespace())
+        || content.ends_with(|c: char| c.is_whitespace())
+    {
+        content.trim()
+    } else {
+        content
+    };
+
+    if content.is_empty() {
+        return String::new();
+    }
+
+    // 检查是否以代码块开始
+    // 由于已执行（或确认不需要）trim，可以安全地使用 starts_with() 检测
+    let in_code_block = content.starts_with("```");
+
+    // 查找合适的截断点
+    let end_pos = if in_code_block {
+        // 如果在代码块中，找到代码块结束标记
+        find_code_block_end(content)
+    } else {
+        // 否则查找第一个 \n\n
+        content.find("\n\n")
+    };
+
+    // 提取内容
+    let extracted = match end_pos {
+        Some(pos) => &content[..pos],
+        None => content,
+    };
+
+    // 硬截断保护
+    let truncated = if extracted.chars().count() > MAX_SUMMARY_CHARS {
+        smart_truncate(extracted, MAX_SUMMARY_CHARS)
+    } else if extracted.chars().count() > FALLBACK_CHARS && end_pos.is_none() {
+        // 回退机制：无段落分隔且超过 200 字符，截取前 200 字符
+        smart_truncate(extracted, FALLBACK_CHARS)
+    } else {
+        extracted.to_string()
+    };
+
+    truncated.trim().to_string()
+}
+
+/// 查找代码块结束位置
+///
+/// 扫描内容，找到第一个关闭的 ``` 标记
+/// 返回代码块结束后的位置（包含 ``` 标记本身）
+fn find_code_block_end(content: &str) -> Option<usize> {
+    let chars: Vec<char> = content.chars().collect();
+    let mut i = 0;
+    let len = chars.len();
+
+    // 跳过开始的 ```
+    while i < len {
+        if chars[i] == '`' {
+            let backtick_count = count_backticks(&chars[i..]);
+            if backtick_count >= 3 {
+                i += backtick_count;
+                break;
+            }
+        }
+        i += 1;
+    }
+
+    // 查找关闭的 ```
+    while i < len {
+        if chars[i] == '`' {
+            let backtick_count = count_backticks(&chars[i..]);
+            if backtick_count >= 3 {
+                return Some(i + backtick_count);
+            }
+        }
+        i += 1;
+    }
+
+    None
+}
+
+/// 计算连续的反引号数量
+fn count_backticks(chars: &[char]) -> usize {
+    chars.iter().take_while(|&&c| c == '`').count()
+}
+
+/// 智能截断：在最后一个句子结束符处截断
+///
+/// 如果能在限制内找到句子结束符（. ! ?），在此处截断
+/// 否则在限制处截断并添加 ...
+fn smart_truncate(text: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let limit = max_chars.min(chars.len());
+
+    // 从限制位置向前查找最后一个句子结束符
+    let mut sentence_end = None;
+    for i in (0..limit).rev() {
+        if chars[i] == '.' || chars[i] == '!' || chars[i] == '?' {
+            // 确保句子结束符后面是空格或换行
+            if i + 1 < chars.len() && (chars[i + 1].is_whitespace() || i + 1 == limit) {
+                sentence_end = Some(i + 1);
+                break;
+            }
+        }
+    }
+
+    match sentence_end {
+        Some(pos) => chars[..pos].iter().collect(),
+        None => {
+            // 找不到句子结束符，在限制处截断
+            let truncated: String = chars[..limit].iter().collect();
+            // 添加省略号（如果文本被截断了）
+            if limit < chars.len() {
+                format!("{}...", truncated.trim_end())
+            } else {
+                truncated
+            }
+        }
+    }
+}
+
 /// 解析后的 Markdown 文档
 ///
 /// # 字段
 ///
 /// * `path` - 原始文件路径
 /// * `title` - 文档标题（通常是 H1 标题或文件名）
-/// * `summary` - 文档摘要（前 200 个字符）
+/// * `summary` - 文档摘要（智能提取首段或代码块，最多 1000 字符）
 /// * `content` - 完整的 Markdown 内容
 /// * `sections` - 按 H2 标题切片的片段列表（拥有所有权）
 ///
@@ -42,6 +190,7 @@ pub struct SlicedSection {
     pub section_title: String,
     pub content: String,
     pub parent_doc_title: String,
+    pub summary: String,
 }
 
 /// 表示一个按 H2 标题切片后的文档片段（零拷贝版本）
@@ -49,18 +198,30 @@ pub struct SlicedSection {
 /// # 字段
 ///
 /// * `section_title` - H2 标题文本（拥有所有权）
-/// * `content` - 该 H2 下的完整内容（从 H2 开始到下一个 H2 之前，借用切片）
+/// * `content` - 该 H2 下的完整内容（**不包含 H2 标题本身**，从标题之后到下一个 H2 之前，借用切片）
 /// * `parent_doc_title` - 父文档的 H1 标题（借用切片）
+/// * `summary` - 切片摘要（智能提取首段或代码块，拥有所有权）
 ///
 /// # 零拷贝设计
 ///
 /// `content` 和 `parent_doc_title` 使用借用切片，避免复制数据。
-/// 只有 `section_title` 拥有所有权，因为它需要从解析的多个事件中拼接。
+/// `section_title` 和 `summary` 拥有所有权，因为它们需要从解析的多个事件中拼接或计算。
+///
+/// # 方案 D 优化
+///
+/// 利用 pulldown-cmark AST 特性，切片从 `Event::End(Heading).range.end` 开始，
+/// 因此 `content` 字段**不包含 H2 标题本身**（如 `## Title`）。
+///
+/// 优势：
+/// - 避免 Header Pollution（标题污染摘要）
+/// - 节省 Token 开支（存储和 Embedding 不重复标题）
+/// - 数据结构更清晰（标题在 `section_title`，内容在 `content`）
 #[derive(Debug, Clone)]
 pub struct SlicedDoc<'a> {
     pub section_title: String,
     pub content: &'a str,
     pub parent_doc_title: &'a str,
+    pub summary: String,
 }
 
 pub fn parse_markdown(file_path: &str) -> Result<ParsedDoc> {
@@ -97,8 +258,10 @@ pub fn parse_markdown(file_path: &str) -> Result<ParsedDoc> {
             .to_string();
     }
 
-    let summary = content.chars().take(200).collect::<String>();
+    // 性能优化：先 trim，再调用 extract_summary，避免重复 trim
+    // 这样可以确保 extract_summary 接收的是已清理的内容，内部无需再次 trim
     let content_cleaned = content.trim().to_string();
+    let summary = extract_summary(&content_cleaned);
 
     // 调用零拷贝切片函数，然后将结果转换为拥有所有权的版本
     // 性能考虑：这里需要复制数据，但权衡是简化了生命周期管理
@@ -109,6 +272,7 @@ pub fn parse_markdown(file_path: &str) -> Result<ParsedDoc> {
             section_title: slice.section_title,
             content: slice.content.to_string(), // 借用 → 拥有所有权
             parent_doc_title: slice.parent_doc_title.to_string(),
+            summary: slice.summary, // 已经拥有所有权，直接移动
         })
         .collect();
 
@@ -139,6 +303,14 @@ pub fn parse_markdown(file_path: &str) -> Result<ParsedDoc> {
 /// - H3/H4 等子标题作为当前 H2 片段的内容的一部分
 /// - 使用 AST 解析，代码块中的 `##` 不会被误认为 H2 标题
 /// - 零拷贝实现：`content` 和 `parent_doc_title` 使用借用切片
+/// - **方案 D 优化**：切片从 `Event::End(Heading).range.end` 开始，**不包含 H2 标题本身**
+/// - 空切片（标题后无内容）会被自动跳过
+///
+/// # 方案 D 的优势
+///
+/// - 避免 Header Pollution：切片内容不含标题，摘要提取更准确
+/// - 节省 Token 开支：标题已存储在 `section_title`，无需在 `content` 中重复
+/// - 数据结构清晰：标题与内容分离
 ///
 /// # 示例
 ///
@@ -147,26 +319,36 @@ pub fn parse_markdown(file_path: &str) -> Result<ParsedDoc> {
 /// let slices = slice_by_headers(content, "Doc");
 /// assert_eq!(slices.len(), 2);
 /// assert_eq!(slices[0].section_title, "Section 1");
+/// assert!(!slices[0].content.contains("## Section 1")); // 切片不包含标题
+/// assert!(slices[0].content.contains("Content 1"));       // 只包含实际内容
 /// ```
 pub fn slice_by_headers<'a>(content: &'a str, parent_title: &'a str) -> Vec<SlicedDoc<'a>> {
     let mut slices = Vec::new();
 
     let parser = Parser::new(content);
-    let mut h2_start_indices: Vec<usize> = Vec::new();
+    let mut h2_start_indices: Vec<usize> = Vec::new(); // 存储 H2 标题开始位置
+    let mut h2_end_indices: Vec<usize> = Vec::new();
     let mut h2_titles: Vec<String> = Vec::new();
     let mut current_h2_title: Option<String> = None;
 
-    // 第一遍遍历：收集所有 H2 标题的位置和文本
+    // 第一遍遍历：收集所有 H2 标题的结束位置和文本
+    // 利用 AST 特性：使用 Event::End(Heading).range.end 作为切片起点
+    // 这样切片内容不包含 H2 标题本身，避免 Header Pollution
     for (event, range) in parser.into_offset_iter() {
         match event {
             Event::Start(Tag::Heading(HeadingLevel::H2, ..)) => {
+                // 记录 H2 标题的开始位置（用于计算切片结束边界）
                 h2_start_indices.push(range.start);
                 current_h2_title = Some(String::new());
             }
             Event::End(Tag::Heading(HeadingLevel::H2, ..)) => {
-                if let Some(title) = current_h2_title.take() {
-                    h2_titles.push(title);
-                }
+                // 安全修复：保证 h2_titles 和 h2_end_indices 长度一致
+                // 即使标题为空，也添加占位符，避免数组索引错位
+                let title = current_h2_title.take().unwrap_or_default();
+                h2_titles.push(title);
+                // 关键改动：存储 range.end（标题结束位置）
+                // 这样切片从标题之后开始，不包含标题本身
+                h2_end_indices.push(range.end);
             }
             Event::Text(text) | Event::Code(text) => {
                 // 处理文本和行内代码
@@ -185,32 +367,164 @@ pub fn slice_by_headers<'a>(content: &'a str, parent_title: &'a str) -> Vec<Slic
     }
 
     // 如果没有 H2 标题，返回空向量
-    if h2_start_indices.is_empty() {
+    if h2_end_indices.is_empty() {
         return slices;
     }
 
-    // 第二阶段：根据 H2 位置进行切片
-    for (i, &start_idx) in h2_start_indices.iter().enumerate() {
-        let end_idx = if i + 1 < h2_start_indices.len() {
-            // 下一个 H2 的开始位置
+    // 第二阶段：根据 H2 结束位置进行切片
+    for (i, &end_idx) in h2_end_indices.iter().enumerate() {
+        // 计算切片的结束位置
+        // 关键修复：使用 h2_start_indices[i + 1] 而不是 h2_end_indices[i + 1]
+        // h2_end_indices 存储的是标题结束位置，使用下一个 H2 的结束位置会导致当前切片包含下一个 H2 标题
+        // 正确做法是使用下一个 H2 的开始位置，确保切片在下一个 H2 标题之前结束
+        let slice_end = if i + 1 < h2_start_indices.len() {
             h2_start_indices[i + 1]
         } else {
-            // 文档结尾
             content.len()
         };
 
-        // 零拷贝：直接借用原始字符串的切片
-        let slice_content = &content[start_idx..end_idx];
-        let section_title = h2_titles.get(i).cloned().unwrap_or_default();
+        // 跳过标题后的所有空白字符（换行、空格、制表符等），找到实际内容的起始位置
+        let after_title = &content[end_idx..];
+        let content_start = skip_leading_whitespace(after_title);
+
+        // 计算实际内容的起始偏移量
+        let skipped_bytes = after_title.len() - content_start.len();
+        let start_byte_offset = end_idx + skipped_bytes;
+
+        // 检查是否是空切片：使用精确的边界计算
+        // slice_end 已经通过 h2_start_indices[i+1] 精确界定
+        // 如果 start_byte_offset >= slice_end，说明没有实际内容
+        let is_empty = start_byte_offset >= slice_end;
+
+        if is_empty {
+            continue;
+        }
+
+        let slice_content = &content[start_byte_offset..slice_end];
+
+        // 性能优化（方案D）：只 trim 一次，复用结果
+        // 1. 检查是否为空切片（安全修复）
+        // 2. 传入 extract_summary，避免内部再次 trim
+        let slice_content_trimmed = slice_content.trim();
+
+        // 安全修复：跳过空切片（只有空白字符的内容）
+        if slice_content_trimmed.is_empty() {
+            continue;
+        }
+
+        let mut section_title = h2_titles.get(i).cloned().unwrap_or_default();
+
+        // 智能标题生成：如果标题为空，从内容自动生成有意义的标题
+        // 这避免了数据丢失，同时保持标题的可读性
+        if section_title.is_empty() {
+            section_title = generate_smart_title(slice_content_trimmed);
+        }
+
+        // 性能优化：传入已 trim 的内容，避免 extract_summary 内部重复 trim
+        let summary = extract_summary(slice_content_trimmed);
 
         slices.push(SlicedDoc {
             section_title,
             content: slice_content,
             parent_doc_title: parent_title,
+            summary,
         });
     }
 
     slices
+}
+
+/// 从切片内容生成智能标题
+///
+/// 当 H2 标题为空时，从内容的前几个字符生成有意义的标题。
+///
+/// # 逻辑
+/// 1. 提取内容的前几个词（最多 30 个字符）
+/// 2. 查找第一个句子结束符（。！！？.!?）作为截断点
+/// 3. 如果是代码块开头，使用 "Code: ..." 前缀
+/// 4. 清理空白和换行
+/// 5. 如果太长，添加省略号
+///
+/// # 参数
+/// - `content`: 切片内容（应该已 trim）
+///
+/// # 返回
+/// 生成的智能标题（如果内容为空，返回 "Untitled Section"）
+fn generate_smart_title(content: &str) -> String {
+    const MAX_TITLE_CHARS: usize = 30;
+
+    if content.is_empty() {
+        return "Untitled Section".to_string();
+    }
+
+    // 检查是否以代码块开始
+    let is_code_block = content.starts_with("```");
+
+    // 提取前几个字符作为标题基础
+    let content_start = if is_code_block {
+        // 对于代码块，跳过 ``` 后提取
+        let after_backticks = &content[3..];
+        let first_line = after_backticks.lines().next().unwrap_or("");
+        format!("Code: {}", first_line.trim())
+    } else {
+        // 提取第一行或前 MAX_TITLE_CHARS 个字符
+        let first_line = content.lines().next().unwrap_or("");
+        if first_line.chars().count() > MAX_TITLE_CHARS {
+            // 尝试在句子边界截断
+            find_sentence_break(first_line, MAX_TITLE_CHARS)
+        } else {
+            first_line.to_string()
+        }
+    };
+
+    // 清理标题
+    let title = content_start
+        .trim()
+        .replace('\n', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    // 如果仍然太长，强制截断
+    if title.chars().count() > MAX_TITLE_CHARS {
+        let truncated: String = title.chars().take(MAX_TITLE_CHARS - 3).collect();
+        format!("{}...", truncated)
+    } else {
+        title
+    }
+}
+
+/// 在句子结束符处截断文本
+///
+/// 查找最后一个句子结束符（。！！？.!?）并在此处截断
+fn find_sentence_break(text: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let limit = max_chars.min(chars.len());
+
+    // 从限制位置向前查找最后一个句子结束符
+    for i in (0..limit).rev() {
+        let c = chars[i];
+        if c == '。' || c == '！' || c == '？' || c == '.' || c == '!' || c == '?' {
+            return chars[..=i].iter().collect();
+        }
+    }
+
+    // 没找到句子结束符，在限制处截断
+    let truncated: String = chars[..limit].iter().collect();
+    format!("{}...", truncated.trim_end())
+}
+
+/// 跳过字符串开头的所有空白字符（换行、空格、制表符等）
+///
+/// 用于去除切片标题后可能存在的空行和空白
+///
+/// # 示例
+/// - `"\n\nContent"` → `"Content"`
+/// - `"  \t\nContent"` → `"Content"`
+/// - `"\n"` → `""`
+/// - `"  \t  "` → `""`
+fn skip_leading_whitespace(s: &str) -> &str {
+    s.trim_start_matches(|c: char| c.is_whitespace())
 }
 
 #[cfg(test)]
@@ -231,6 +545,88 @@ mod tests {
         assert!(result.is_ok());
         let doc = result.unwrap();
         assert_eq!(doc.title, "sample_without_h1");
+    }
+
+    // Summary extraction tests
+    #[test]
+    fn test_extract_summary_normal_paragraph() {
+        let content = "这是第一段。\n\n这是第二段...";
+        let summary = extract_summary(content);
+        assert_eq!(summary, "这是第一段。");
+    }
+
+    #[test]
+    fn test_extract_summary_with_code_block() {
+        let content = "```rust\npub fn foo() -> Bar\n```\n\n一些说明文字...";
+        let summary = extract_summary(content);
+        assert!(summary.contains("```rust"));
+        assert!(summary.contains("pub fn foo() -> Bar"));
+        assert!(summary.contains("```"));
+    }
+
+    #[test]
+    fn test_extract_summary_code_block_with_newlines() {
+        let content = "```rust\npub fn foo(\n    x: i32\n) -> Bar\n```\n\n说明";
+        let summary = extract_summary(content);
+        // 应该包含完整的代码块，即使内部有换行
+        assert!(summary.contains("```rust"));
+        assert!(summary.contains("pub fn foo("));
+        assert!(summary.contains(") -> Bar"));
+        assert!(summary.contains("```"));
+    }
+
+    #[test]
+    fn test_extract_summary_no_paragraph_break() {
+        let content = "短文本或没有双换行的长文本...";
+        let summary = extract_summary(content);
+        // 应该返回原内容（短于 200 字符）
+        assert_eq!(summary, content);
+    }
+
+    #[test]
+    fn test_extract_summary_long_without_break() {
+        let content = "a".repeat(300);
+        let summary = extract_summary(&content);
+        // 应该截断到 200 字符左右
+        assert!(summary.len() <= 203); // 200 + "..."
+        assert!(summary.ends_with("..."));
+    }
+
+    #[test]
+    fn test_extract_summary_wall_of_text() {
+        let content = "这是一个超长的段落，用户从不换行。".repeat(100);
+        let summary = extract_summary(&content);
+        // 应该截断到 1000 字符左右
+        assert!(summary.chars().count() <= 1003);
+        assert!(summary.ends_with("..."));
+    }
+
+    #[test]
+    fn test_extract_summary_empty_content() {
+        let summary = extract_summary("");
+        assert_eq!(summary, "");
+    }
+
+    #[test]
+    fn test_extract_summary_whitespace_only() {
+        let summary = extract_summary("   \n\n   ");
+        assert_eq!(summary, "");
+    }
+
+    #[test]
+    fn test_extract_summary_sentence_truncation() {
+        let content = "这是第一句话。这是第二句话。这是第三句话。这是第四句话。".repeat(10);
+        let summary = extract_summary(&content);
+        // 应该在句子结束处截断
+        assert!(summary.chars().count() <= 1003);
+        // 检查是否在句子边界截断（以 . ! ? 结尾）
+        let last_char = summary.chars().last().unwrap();
+        if summary.ends_with("...") {
+            // 如果添加了 ...，前面的内容可能不在句子边界
+            assert!(summary.chars().count() <= 1003);
+        } else {
+            assert!(last_char == '.' || last_char == '!' || last_char == '?');
+        }
     }
 
     // Slicing tests
@@ -258,6 +654,13 @@ Content for section three.
         assert_eq!(slices[0].section_title, "Section One");
         assert_eq!(slices[1].section_title, "Section Two");
         assert_eq!(slices[2].section_title, "Section Three");
+
+        // 关键验证：切片内容不包含 H2 标题（方案 D 的核心改进）
+        assert!(!slices[0].content.contains("## Section One"));
+        assert!(!slices[1].content.contains("## Section Two"));
+        assert!(!slices[2].content.contains("## Section Three"));
+
+        // 切片内容应该只包含实际内容
         assert!(slices[0].content.contains("Content for section one."));
         assert!(slices[1].content.contains("Content for section two."));
         assert!(slices[2].content.contains("Content for section three."));
@@ -309,6 +712,10 @@ End of main section.
         let slices = slice_by_headers(content, "Parent Doc");
         assert_eq!(slices.len(), 1);
         assert_eq!(slices[0].section_title, "Section One");
+
+        // 方案 D：切片内容不包含 H2 标题
+        assert!(!slices[0].content.contains("## Section One"));
+
         // 代码块应该完整包含在切片中
         assert!(slices[0].content.contains("```"));
         assert!(slices[0]
@@ -328,11 +735,11 @@ Some content.
 "#;
 
         let slices = slice_by_headers(content, "Parent Doc");
-        assert_eq!(slices.len(), 2);
-        assert_eq!(slices[0].section_title, "Section One");
-        assert_eq!(slices[1].section_title, "Section Two");
-        // 第一个切片的内容可能只有标题，或为空
-        assert!(slices[0].content.contains("## Section One"));
+
+        // 方案 D：空切片被跳过（Section One 后面直接是 Section Two，没有实际内容）
+        assert_eq!(slices.len(), 1);
+        assert_eq!(slices[0].section_title, "Section Two");
+        assert!(slices[0].content.contains("Some content."));
     }
 
     #[test]
@@ -376,27 +783,48 @@ fn test_edge_cases_empty_h2() {
     // 测试空的 H2 标题
     let content = "# Parent\n\n##\n\nContent after empty header.";
     let slices = slice_by_headers(content, "Parent");
-    assert_eq!(slices.len(), 1);
-    // 空标题应该被捕获为空字符串
-    assert_eq!(slices[0].section_title, "");
+
+    // 智能标题生成：空标题会从内容生成有意义的标题
+    // 避免数据丢失，保持内容可搜索
+    assert_eq!(
+        slices.len(),
+        1,
+        "Empty H2 titles should generate smart titles from content"
+    );
+
+    // 验证智能标题包含内容的前几个词
+    assert!(
+        slices[0].section_title.contains("Content after"),
+        "Smart title should be generated from content"
+    );
+
+    // 验证内容被保留
+    assert!(
+        slices[0].content.contains("Content after empty header"),
+        "Content should be preserved"
+    );
 }
 
 #[test]
 fn test_edge_cases_h2_at_eof() {
-    // 测试 H2 后面直接 EOF
+    // 测试 H2 后面直接 EOF（没有内容）
     let content = "# Parent\n\n## Section One";
     let slices = slice_by_headers(content, "Parent");
-    assert_eq!(slices.len(), 1);
-    assert_eq!(slices[0].section_title, "Section One");
+
+    // 方案 D：空切片被跳过
+    assert_eq!(slices.len(), 0);
 }
 
 #[test]
 fn test_edge_cases_consecutive_h2() {
-    // 测试连续的 H2
+    // 测试连续的 H2（中间没有内容）
     let content = "# Parent\n\n## First\n## Second\n## Third\n\nContent.";
     let slices = slice_by_headers(content, "Parent");
-    assert_eq!(slices.len(), 3);
-    assert_eq!(slices[0].section_title, "First");
-    assert_eq!(slices[1].section_title, "Second");
-    assert_eq!(slices[2].section_title, "Third");
+
+    // 方案 D：只有包含实际内容的切片会被保留
+    // First 和 Second 后面直接是下一个标题，所以被跳过
+    // Third 后面有 "Content."，所以被保留
+    assert_eq!(slices.len(), 1);
+    assert_eq!(slices[0].section_title, "Third");
+    assert!(slices[0].content.contains("Content."));
 }

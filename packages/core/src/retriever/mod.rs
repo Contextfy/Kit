@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 /// * `id` - 记录的唯一标识符
 /// * `title` - 记录标题
 /// * `parent_doc_title` - 父文档的标题
-/// * `summary` - 内容摘要（前 200 个字符）
+/// * `summary` - 内容摘要（智能提取首段或代码块，最多 1000 字符）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Brief {
     pub id: String,
