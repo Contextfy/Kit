@@ -1,4 +1,4 @@
-use crate::parser::ParsedDoc;
+use crate::parser::{extract_summary, ParsedDoc};
 use anyhow::{Context, Result};
 // use lancedb::connect;
 // use arrow::array::{StringArray, StringBuilder};
@@ -256,7 +256,7 @@ impl KnowledgeStore {
                     id: id.clone(),
                     title: slice.section_title.clone(),
                     parent_doc_title: slice.parent_doc_title.clone(),
-                    summary: slice.content.chars().take(200).collect::<String>(),
+                    summary: extract_summary(&slice.content),
                     content: slice.content.clone(),
                     source_path: doc.path.clone(),
                 };
@@ -343,11 +343,13 @@ mod tests {
                     section_title: "Section 1".to_string(),
                     content: "Content 1".to_string(),
                     parent_doc_title: "Test Doc".to_string(),
+                    summary: "Content 1".to_string(),
                 },
                 SlicedSection {
                     section_title: "Section 2".to_string(),
                     content: "Content 2".to_string(),
                     parent_doc_title: "Test Doc".to_string(),
+                    summary: "Content 2".to_string(),
                 },
             ],
         };
@@ -428,12 +430,14 @@ mod tests {
                 section_title: "".to_string(),
                 content: "🚀 Emoji & \"Quotes\" & \nNewlines".to_string(),
                 parent_doc_title: "Edge Case Doc".to_string(),
+                summary: "🚀 Emoji & \"Quotes\" & \nNewlines".to_string(),
             },
             // Case B: 只有标题，内容为空
             SlicedSection {
                 section_title: "Empty Content".to_string(),
                 content: "".to_string(),
                 parent_doc_title: "Edge Case Doc".to_string(),
+                summary: "".to_string(),
             },
         ];
 
@@ -443,6 +447,7 @@ mod tests {
                 section_title: format!("Section {}", i),
                 content: format!("Content for section {}", i),
                 parent_doc_title: "Edge Case Doc".to_string(),
+                summary: format!("Content for section {}", i),
             });
         }
 
@@ -497,11 +502,13 @@ mod tests {
                     section_title: "Section 1".to_string(),
                     content: "Content 1".to_string(),
                     parent_doc_title: "Test Doc".to_string(),
+                    summary: "Content 1".to_string(),
                 },
                 SlicedSection {
                     section_title: "Section 2".to_string(),
                     content: "Content 2".to_string(),
                     parent_doc_title: "Test Doc".to_string(),
+                    summary: "Content 2".to_string(),
                 },
             ],
         };
@@ -562,6 +569,7 @@ mod tests {
                 section_title: format!("Section {}", i),
                 content: format!("Content for section {}", i),
                 parent_doc_title: "Atomicity Test".to_string(),
+                summary: format!("Content for section {}", i),
             });
         }
 
