@@ -52,11 +52,28 @@ The core engine SHALL extract summaries using the first semantic paragraph with 
 
 ## MODIFIED Requirements
 
-### Requirement: Semantic Summarization
-The system SHALL generate summaries based on content structure. 系统 SHALL 基于内容结构生成摘要。
+### Requirement: Semantic Chunking
+The core engine SHALL split markdown documents into chunks using H2 headers as semantic boundaries. 核心引擎 SHALL 使用 H2 标题作为语义边界将 markdown 文档分割为块。
 
-#### Scenario: Summarizing Markdown
-- **WHEN** the system generates a summary for a slice or document
-- **THEN** it extracts the first complete paragraph (delimited by `\n\n`)
-- **OR** it extracts the complete first code block if the section starts with one
-- **OTHERWISE** it falls back to a 200-character truncation
+#### Scenario: 使用 H2 标题分割文档
+- **When** 用户解析包含多个 H2 标题的 markdown 文档时
+- **Then** 系统将文档分割为多个语义块，每个块包含：
+  - `id`：块的唯一 UUID
+  - `parent_id`：父文档的 UUID（整个文档的 ID）
+  - `title`：H2 标题文本作为块标题
+  - `summary`：基于内容结构的智能摘要（首段或代码块，最多 1000 字符）
+  - `content`：从该 H2 标题到下一个 H2 标题（或文档结尾）的完整内容
+  - `position`：块在文档中的顺序索引（从 0 开始）
+
+#### Scenario: 处理没有 H2 标题的文档
+- **When** 用户解析不包含任何 H2 标题的 markdown 文档时
+- **Then** 系统将整个文档作为单个块处理，`parent_id` 指向自身
+
+#### Scenario: 保留文档级别元数据
+- **When** 文档被分割为多个块时
+- **Then** 系统创建父文档记录，包含：
+  - `id`：父文档的唯一 UUID
+  - `title`：文档的 H1 标题或文件名
+  - `summary`：所有块摘要的拼接（最多 500 个字符）
+  - `chunk_count`：子块的数量
+  - `is_parent`：设置为 `true`

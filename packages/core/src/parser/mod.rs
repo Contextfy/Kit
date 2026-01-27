@@ -80,15 +80,20 @@ pub fn extract_summary(content: &str) -> String {
 ///
 /// 扫描内容，找到第一个关闭的 ``` 标记
 /// 返回代码块结束后的位置（包含 ``` 标记本身）
+///
+/// # 返回值
+///
+/// 返回**字节偏移量** (byte offset)，而非字符索引
+/// 这样可以安全地用于字符串切片操作
 fn find_code_block_end(content: &str) -> Option<usize> {
-    let chars: Vec<char> = content.chars().collect();
+    let bytes = content.as_bytes();
     let mut i = 0;
-    let len = chars.len();
+    let len = bytes.len();
 
     // 跳过开始的 ```
     while i < len {
-        if chars[i] == '`' {
-            let backtick_count = count_backticks(&chars[i..]);
+        if bytes[i] == b'`' {
+            let backtick_count = count_backticks_bytes(&bytes[i..]);
             if backtick_count >= 3 {
                 i += backtick_count;
                 break;
@@ -99,8 +104,8 @@ fn find_code_block_end(content: &str) -> Option<usize> {
 
     // 查找关闭的 ```
     while i < len {
-        if chars[i] == '`' {
-            let backtick_count = count_backticks(&chars[i..]);
+        if bytes[i] == b'`' {
+            let backtick_count = count_backticks_bytes(&bytes[i..]);
             if backtick_count >= 3 {
                 return Some(i + backtick_count);
             }
@@ -111,9 +116,17 @@ fn find_code_block_end(content: &str) -> Option<usize> {
     None
 }
 
-/// 计算连续的反引号数量
-fn count_backticks(chars: &[char]) -> usize {
-    chars.iter().take_while(|&&c| c == '`').count()
+/// 计算连续的反引号数量（基于字节）
+///
+/// # 参数
+///
+/// * `bytes` - 字节切片
+///
+/// # 返回值
+///
+/// 返回连续反引号的数量
+fn count_backticks_bytes(bytes: &[u8]) -> usize {
+    bytes.iter().take_while(|&&b| b == b'`').count()
 }
 
 /// 智能截断：在最后一个句子结束符处截断

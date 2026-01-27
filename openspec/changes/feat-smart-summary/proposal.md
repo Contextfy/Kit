@@ -13,7 +13,8 @@
 ### 当前问题示例
 
 对于一个以函数签名开始的章节：
-````markdown
+
+```markdown
 ## Authentication
 
 ```rust
@@ -24,7 +25,7 @@ pub async fn authenticate(
 ```
 
 To use the API, you need to authenticate...
-````
+```
 
 当前摘要（200 字符）只会包含函数签名的前几行，丢失完整的类型签名和返回类型，这对于开发者理解 API 极不友好。
 
@@ -61,35 +62,40 @@ To use the API, you need to authenticate...
 
 ### 关键场景示例
 
-**场景 A：普通文本段落**
-```
+#### 场景 A：普通文本段落
+
+```text
 输入："这是第一段。\n\n这是第二段..."
 输出："这是第一段。"
 ```
 
-**场景 B：以代码块开始**
-````markdown
+#### 场景 B：以代码块开始
+
+```markdown
 输入："```rust\npub fn foo() -> Bar\n```\n\n一些说明文字..."
 输出："```rust\npub fn foo() -> Bar\n```"
-````
-
-**场景 C：无段落分隔**
 ```
+
+#### 场景 C：无段落分隔
+
+```text
 输入："短文本或没有双换行的长文本..."
 输出："前 200 字符（回退到现有行为）"
 ```
 
-**场景 D：超长段落（Wall of Text 保护）**
-```
+#### 场景 D：超长段落（Wall of Text 保护）
+
+```text
 输入："2000 字符的单一段落，从不换行..."
 输出："前 ~1000 字符（在最后一个完整句子处截断，或添加 ...）"
 ```
 
-**场景 E：超长代码块**
-````markdown
+#### 场景 E：超长代码块
+
+```markdown
 输入："```rust\n// 500 行的代码实现\n...\n```"
 输出："完整代码块，但如果超过 1000 字符则截断并添加 ..."
-````
+```
 
 ## 替代方案考虑
 
@@ -100,5 +106,9 @@ To use the API, you need to authenticate...
 ## 影响范围
 
 - **影响规范**：`core-engine`（Markdown 解析）
+- **影响文件**：
+  - `packages/core/src/parser/mod.rs`（添加 `extract_summary` 函数）
+  - `packages/core/src/storage/mod.rs`（应用智能摘要）
+  - `packages/core/src/retriever/mod.rs`（更新文档注释）
 - **破坏性变更**：无（摘要字段格式不变）
 - **性能影响**：极小（简单字符串解析）
