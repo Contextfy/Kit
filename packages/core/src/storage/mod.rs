@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 // use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 // use arrow::record_batch::RecordBatch;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use uuid::Uuid;
@@ -26,7 +27,8 @@ pub struct KnowledgeRecord {
     pub parent_doc_title: String,
     pub summary: String,
     pub content: String,
-    pub source_path: String, // 新增字段：记录原始文件路径
+    #[serde(default)]
+    pub source_path: String, // 新增字段：记录原始文件路径，向后兼容旧版 JSON
 }
 
 pub struct KnowledgeStore {
@@ -87,8 +89,17 @@ impl KnowledgeStore {
     }
 
     pub async fn search(&self, query: &str) -> Result<Vec<KnowledgeRecord>> {
-        let mut records = Vec::new();
+        let mut scored_records = Vec::new();
         let mut entries = fs::read_dir(&self.data_dir).await?;
+
+        // 分词：按空格分割查询为多个 tokens
+        let query_lower = query.to_lowercase();
+        let query_tokens: Vec<&str> = query_lower.split_whitespace().collect();
+
+        // 前置拦截：空查询直接返回空结果
+        if query_tokens.is_empty() {
+            return Ok(Vec::new());
+        }
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
@@ -105,17 +116,48 @@ impl KnowledgeStore {
             if path.extension().and_then(|s| s.to_str()) == Some("json") {
                 let content = fs::read_to_string(&path).await?;
                 if let Ok(record) = serde_json::from_str::<KnowledgeRecord>(&content) {
-                    if record.title.to_lowercase().contains(&query.to_lowercase())
-                        || record
-                            .summary
-                            .to_lowercase()
-                            .contains(&query.to_lowercase())
-                    {
-                        records.push(record);
+                    // 计算匹配分数：title 匹配权重更高（2分），summary 匹配权重较低（1分）
+                    let title_lower = record.title.to_lowercase();
+                    let summary_lower = record.summary.to_lowercase();
+
+                    let mut match_score = 0;
+                    let mut title_matches = 0;
+
+                    for token in &query_tokens {
+                        // title 中的匹配权重为 2
+                        if title_lower.contains(token) {
+                            match_score += 2;
+                            title_matches += 1;
+                        }
+                        // summary 中的匹配权重为 1
+                        if summary_lower.contains(token) {
+                            match_score += 1;
+                        }
+                    }
+
+                    // 奖励：如果 title 包含所有 tokens，给予额外加分
+                    if title_matches == query_tokens.len() {
+                        match_score += 3; // 完全匹配奖励
+                    } else if title_matches > 0 && title_matches >= query_tokens.len().div_ceil(2) {
+                        match_score += 1; // 部分匹配奖励（必须至少命中 1 个）
+                    }
+
+                    // 只保留至少匹配一个 token 的记录
+                    if match_score > 0 {
+                        scored_records.push((record, match_score));
                     }
                 }
             }
         }
+
+        // 按匹配分数降序排序，分数相同时使用 ID 作为确定性 tie-breaker
+        scored_records.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| a.0.id.cmp(&b.0.id))
+        });
+
+        // 提取排序后的记录
+        let records: Vec<KnowledgeRecord> = scored_records.into_iter().map(|(r, _)| r).collect();
 
         Ok(records)
     }
