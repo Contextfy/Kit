@@ -66,7 +66,8 @@ if [ -d "$TEMP_DIR" ]; then
     rm -rf "$TEMP_DIR"
 fi
 
-# Create target directory
+# Create target directory (ensure idempotency)
+rm -rf "$TARGET_DIR"
 mkdir -p "$TARGET_DIR"
 
 # Sparse clone the repository (shallow + blob:none filter for minimal download)
@@ -105,12 +106,17 @@ echo "✅ Fetch completed!"
 echo "📊 Total files copied: $copied_count"
 echo "📁 Target directory: docs/minecraft-bedrock/"
 
-if [ $copied_count -gt 0 ]; then
+# Strict validation: ensure all expected files were copied
+expected_count=${#TARGET_FILES[@]}
+if [ $copied_count -eq $expected_count ]; then
     echo ""
     echo "📜 Copied files:"
     ls -1 "$TARGET_DIR"
 else
     echo ""
-    echo "⚠️  Warning: No files were copied. Please check the file list and repository structure."
+    echo "❌ Error: File count mismatch!"
+    echo "   Expected: $expected_count files"
+    echo "   Actual:   $copied_count files"
+    echo "   Missing:  $((expected_count - copied_count)) files"
     exit 1
 fi
