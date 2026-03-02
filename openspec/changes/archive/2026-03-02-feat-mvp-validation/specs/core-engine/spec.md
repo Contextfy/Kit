@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: 知识存储
+### Requirement: Knowledge Storage
 The core engine SHALL store parsed documents and their semantic chunks in a file-system based JSON storage with atomic write guarantees and support for slice-level storage. 核心引擎 SHALL 使用基于文件系统的 JSON 存储来存储解析的文档和语义块，具有原子写入保证并支持切片级别存储。
 
 #### Scenario: 搜索存储的切片（基于分词的匹配优化）
