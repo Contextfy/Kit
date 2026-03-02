@@ -482,7 +482,6 @@ Notes:
 - This function can throw errors.
   - An error will be thrown if volume is less than 0.0.
   - An error will be thrown if fade is less than 0.0.
-  - 
 
 ### **removePropertyOverrideForEntity**
 `
@@ -671,8 +670,8 @@ For this player, overrides an Entity Property on the target Entity to the provid
 
 #### **Parameters**
 - **targetEntity**: [*Entity*](Entity.md)
-  
-  The Entity whose Entity Property is being overriden.
+
+  The Entity whose Entity Property is being overridden.
 - **identifier**: *string*
   
   The Entity Property identifier.
