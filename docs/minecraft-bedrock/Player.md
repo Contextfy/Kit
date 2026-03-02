@@ -122,18 +122,6 @@ Type: *number*
 Notes:
   - This property can throw errors when used.
 
-::: moniker range="=minecraft-bedrock-experimental"
-### **locatorBar**
-`read-only locatorBar: LocatorBar;`
-
-The player's Locator Bar. This property is used for managing waypoints displayed on the HUD.
-
-Type: [*LocatorBar*](LocatorBar.md)
-
-> [!CAUTION]
-> This property is still in pre-release.  Its signature may change or it may be removed in future releases.
-::: moniker-end
-
 ### **name**
 `read-only name: string;`
 
@@ -153,20 +141,6 @@ Type: [*ScreenDisplay*](ScreenDisplay.md)
 
 Notes:
   - This property can throw errors when used.
-
-::: moniker range="=minecraft-bedrock-experimental"
-### **partyId**
-`read-only partyId?: string;`
-
-Type: *string*
-
-> [!CAUTION]
-> This property is still in pre-release.  Its signature may change or it may be removed in future releases.
-
-Notes:
-  - This property can throw errors when used.
-    - Throws [*InvalidEntityError*](InvalidEntityError.md)
-::: moniker-end
 
 ### **playerPermissionLevel**
 `read-only playerPermissionLevel: PlayerPermissionLevel;`
@@ -252,7 +226,6 @@ Adds/removes experience to/from the Player and returns the current experience of
 
 #### **Parameters**
 - **amount**: *number*
-  * Bounds: [`-16777216`, `16777216`]
   
   Amount of experience to add. Note that this can be negative. Min/max bounds at -2^24 ~ 2^24
 
@@ -271,7 +244,6 @@ Adds/removes level to/from the Player and returns the current level of the Playe
 
 #### **Parameters**
 - **amount**: *number*
-  * Bounds: [`-16777216`, `16777216`]
   
   Amount to add to the player. Min/max bounds at -2^24 ~ 2^24
 
@@ -797,7 +769,6 @@ Sets the item cooldown time for a particular cooldown category.
   
   Specifies the cooldown category to retrieve the current cooldown for.
 - **tickDuration**: *number*
-  * Bounds: [`0`, `32767`]
   
   Duration in ticks of the item cooldown.
   

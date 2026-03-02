@@ -194,9 +194,6 @@ Type: *string*
 
 ## Methods
 - [addEffect](#addeffect)
-::: moniker range="=minecraft-bedrock-experimental"
-- [addItem](#additem)
-::: moniker-end
 - [addTag](#addtag)
 - [applyDamage](#applydamage)
 - [applyImpulse](#applyimpulse)
@@ -254,7 +251,6 @@ Adds or updates an effect, like poison, to the entity.
   
   Type of effect to add to the entity.
 - **duration**: *number*
-  * Bounds: [`1`, `20000000`]
   
   Amount of time, in ticks, for the effect to apply. There are 20 ticks per second. Use [*@minecraft/server.TicksPerSecond*](../../../scriptapi/minecraft/server/minecraft-server.md#tickspersecond) constant to convert between ticks and seconds. The value must be within the range [0, 20000000].
 - **options**?: [*EntityEffectOptions*](EntityEffectOptions.md) = `null`
@@ -321,28 +317,6 @@ function quickFoxLazyDog(log: (message: string, status?: number) => void, target
 ```
 
 (preview) Work with this sample on the [MCTools.dev](https://mctools.dev/?open=gp/quickFoxLazyDog.ts) code sandbox.
-
-::: moniker range="=minecraft-bedrock-experimental"
-### **addItem**
-`
-addItem(itemStack: ItemStack): ItemStack | undefined
-`
-
-Adds an item to the entity's inventory.
-
-#### **Parameters**
-- **itemStack**: [*ItemStack*](ItemStack.md)
-
-**Returns** [*ItemStack*](ItemStack.md) | *undefined* - Returns undefined if the item was fully added or returns an ItemStack with the remaining count.
-
-> [!CAUTION]
-> This function is still in pre-release.  Its signature may change or it may be removed in future releases.
-  
-Notes:
-- This function can't be called in restricted-execution mode.
-- This function can throw errors.
-  - Throws [*ContainerRulesError*](ContainerRulesError.md), *Error*, [*InvalidEntityComponentError*](InvalidEntityComponentError.md), [*InvalidEntityError*](InvalidEntityError.md)
-::: moniker-end
 
 ### **addTag**
 `
