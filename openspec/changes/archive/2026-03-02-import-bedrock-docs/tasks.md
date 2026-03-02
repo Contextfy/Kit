@@ -61,7 +61,7 @@
   - **结果**：成功处理 26 个文档，生成 66 个切片
 - [x] 5.2 验证 pulldown-cmark 成功解析中文 Markdown 和微软复杂标签（无 panic）
 - [x] 5.3 确认 `.contextfy/` 产物目录生成且不被 Git 追踪
-- [ ] 5.4 运行 `contextfy scout` 测试检索功能（可选验证）
+- [x] 5.4 运行 `contextfy scout` 测试检索功能（可选验证）
 
 ## 6. 质量门禁（The Trinity）
 
