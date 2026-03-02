@@ -731,7 +731,7 @@ Notes:
 runCommand(commandString: string): CommandResult
 `
 
-Runs a command synchronously using the context of the broader dimenion.
+Runs a command synchronously using the context of the broader dimension.
 
 #### **Parameters**
 - **commandString**: *string*

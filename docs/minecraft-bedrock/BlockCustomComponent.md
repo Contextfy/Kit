@@ -67,7 +67,7 @@ Type: (arg0: [*BlockComponentPlayerBreakEvent*](BlockComponentPlayerBreakEvent.m
 ### **onPlayerInteract**
 `onPlayerInteract?: (arg0: BlockComponentPlayerInteractEvent, arg1: CustomComponentParameters) => void;`
 
-This function will be called when a player sucessfully interacts with the block that this custom component is bound to.
+This function will be called when a player successfully interacts with the block that this custom component is bound to.
 
 Type: (arg0: [*BlockComponentPlayerInteractEvent*](BlockComponentPlayerInteractEvent.md), arg1: [*CustomComponentParameters*](CustomComponentParameters.md)) => *void*
 

@@ -16,7 +16,7 @@
 - **并且**不会因标签嵌套深度导致栈溢出或性能问题
 
 #### Scenario: 构建基岩版文档知识库
-- **当**系统批量处理约 22-25 篇 Minecraft Bedrock Script API 文档时
+- **当**系统批量处理 26 篇 Minecraft Bedrock Script API 文档时
 - **则**所有文档应成功解析并存储到知识库
 - **并且**`contextfy build` 命令完成时显示成功处理的文档数量
 - **并且**生成的切片可通过 `contextfy scout` 正常检索

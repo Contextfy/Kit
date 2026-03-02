@@ -86,7 +86,7 @@ for file in "${TARGET_FILES[@]}"; do
     if [ -f "$file" ]; then
         filename=$(basename "$file")
         cp "$file" "$TARGET_DIR/"
-        ((copied_count++))
+        ((++copied_count))
         echo "  ✓ $filename"
     else
         echo "  ⚠ File not found: $file"

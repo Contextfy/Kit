@@ -66,6 +66,7 @@ pub async fn build() -> Result<()> {
 
     let mut documents_count = 0;
     let mut sections_count = 0;
+    let mut parse_errors = 0;
 
     for entry in fs::read_dir(examples_dir)? {
         let entry = entry?;
@@ -91,9 +92,19 @@ pub async fn build() -> Result<()> {
                 }
                 Err(e) => {
                     eprintln!("  ✗ Failed to parse {}: {}", file_path, e);
+                    parse_errors += 1;
                 }
             }
         }
+    }
+
+    // 如果有解析错误，返回错误
+    if parse_errors > 0 {
+        anyhow::bail!(
+            "Build failed: {} out of {} documents had parsing errors",
+            parse_errors,
+            documents_count + parse_errors
+        );
     }
 
     println!("\n✓ Build complete!");

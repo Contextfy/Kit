@@ -44,7 +44,7 @@
 ## 3. Git 忽略配置
 
 - [x] 3.1 确认 `.gitignore` 已包含构建产物目录：
-  ```
+  ```text
   # Contextfy build artifacts
   .contextfy/
   ```
@@ -86,7 +86,7 @@
   - ✅ 无：`.contextfy/` 目录或其他构建垃圾
 - [x] 7.2 使用 `git diff` 审查代码变更，确认符合 Conventional Commits 风格
 - [x] 7.3 准备并执行 commit：
-  ```
+  ```text
   feat(docs): 导入 Minecraft Bedrock Script API 核心文档
 
   - 新增 26 篇核心 Script API 文档（来自 Contextfy/minecraft-creator-zh-cn）
