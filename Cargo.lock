@@ -229,6 +229,9 @@ dependencies = [
  "anyhow",
  "clap",
  "contextfy-core",
+ "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
 ]
 
