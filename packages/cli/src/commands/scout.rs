@@ -47,7 +47,7 @@ pub async fn scout(query: String) -> Result<()> {
             }
         }
         Err(e) => {
-            return Err(e.into());
+            return Err(e);
         }
     }
 

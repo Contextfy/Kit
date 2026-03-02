@@ -31,7 +31,8 @@ pub fn init(template: Option<String>) -> Result<()> {
     let manifest = r#"{
   "name": "contextfy-project",
   "version": "0.1.0",
-  "description": "A Contextfy knowledge base project"
+  "description": "A Contextfy knowledge base project",
+  "docs_path": "docs/examples"
 }"#;
 
     fs::write("contextfy.json", manifest)?;
