@@ -1,7 +1,11 @@
 pub mod parser;
 pub mod retriever;
+pub mod search;
 pub mod storage;
 
 pub use parser::{parse_markdown, slice_by_headers, ParsedDoc, SlicedDoc, SlicedSection};
 pub use retriever::{Brief, Details, Retriever};
+pub use search::{
+    create_index, create_schema, FIELD_CONTENT, FIELD_KEYWORDS, FIELD_SUMMARY, FIELD_TITLE,
+};
 pub use storage::{KnowledgeRecord, KnowledgeStore};
