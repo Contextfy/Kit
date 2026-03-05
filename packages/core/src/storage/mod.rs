@@ -1,13 +1,11 @@
 use crate::parser::{extract_summary, ParsedDoc};
+use crate::search::{create_index, Indexer, Searcher};
 use anyhow::{Context, Result};
-// use lancedb::connect;
-// use arrow::array::{StringArray, StringBuilder};
-// use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
-// use arrow::record_batch::RecordBatch;
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
+use std::sync::Arc;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 /// 知识库中的一条记录
@@ -20,6 +18,7 @@ use uuid::Uuid;
 /// * `summary` - 内容摘要（前 200 个字符）
 /// * `content` - 完整内容
 /// * `source_path` - 原始文件路径，用于追溯源文件
+/// * `keywords` - 关键词列表（用于全文搜索，为 Issue #10 打桩）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeRecord {
     pub id: String,
@@ -29,10 +28,18 @@ pub struct KnowledgeRecord {
     pub content: String,
     #[serde(default)]
     pub source_path: String, // 新增字段：记录原始文件路径，向后兼容旧版 JSON
+    #[serde(default)]
+    pub keywords: Vec<String>, // 关键词列表（为 Issue #10 打桩）
 }
 
 pub struct KnowledgeStore {
     data_dir: String,
+    /// Tantivy 索引写入器（可选，用于全文搜索）
+    /// 使用 Arc<Mutex<>> 以支持在异步上下文和阻塞任务中安全访问
+    indexer: Option<Arc<Mutex<Indexer>>>,
+    /// Tantivy 搜索器（可选，用于全文搜索）
+    /// 使用 Arc 以支持在异步上下文和阻塞任务中安全访问
+    searcher: Option<Arc<Searcher>>,
 }
 
 impl KnowledgeStore {
@@ -42,8 +49,33 @@ impl KnowledgeStore {
         // 启动恢复：清理上次崩溃遗留的临时目录
         Self::cleanup_orphaned_temp_dirs(data_dir).await;
 
+        // 初始化 Tantivy 索引
+        let index_dir = Path::new(data_dir).join(".tantivy");
+        let (indexer, searcher) = match create_index(Some(index_dir.as_path())) {
+            Ok(index) => {
+                // 创建 Indexer 和 Searcher
+                match (Indexer::new(index.clone()), Searcher::new(index)) {
+                    (Ok(idx), Ok(sch)) => (Some(Arc::new(Mutex::new(idx))), Some(Arc::new(sch))),
+                    (Err(e), _) => {
+                        eprintln!("Warning: Failed to create indexer: {}. Search will fall back to naive matching.", e);
+                        (None, None)
+                    }
+                    (_, Err(e)) => {
+                        eprintln!("Warning: Failed to create searcher: {}. Search will fall back to naive matching.", e);
+                        (None, None)
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to initialize Tantivy index: {}. Search will fall back to naive matching.", e);
+                (None, None)
+            }
+        };
+
         Ok(KnowledgeStore {
             data_dir: data_dir.to_string(),
+            indexer,
+            searcher,
         })
     }
 
@@ -89,6 +121,62 @@ impl KnowledgeStore {
     }
 
     pub async fn search(&self, query: &str) -> Result<Vec<KnowledgeRecord>> {
+        // 优先使用 Tantivy Searcher 执行 BM25 搜索
+        if let Some(searcher) = &self.searcher {
+            // 使用 spawn_blocking 避免阻塞 Tokio 线程池
+            // Tantivy 的 search 是同步阻塞操作，必须在专用线程中执行
+            let searcher_clone = Arc::clone(searcher);
+            let query_owned = query.to_string();
+
+            let search_result = tokio::task::spawn_blocking(move || {
+                searcher_clone.search(&query_owned, 100)
+            })
+            .await;
+
+            match search_result {
+                Ok(Ok(search_results)) => {
+                    // 将 SearchResult 转换为 KnowledgeRecord
+                    // SearchResult.id 现在包含真实的 record.id，直接使用 O(1) 查询
+                    let mut records = Vec::new();
+                    for result in search_results {
+                        match self.get_by_id_fast(&result.id).await {
+                            Ok(Some(record)) => {
+                                records.push(record);
+                            }
+                            Ok(None) => {
+                                eprintln!(
+                                    "Warning: Missing record for BM25 result id={}",
+                                    result.id
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "Warning: Failed to load record id={} after BM25 hit: {}",
+                                    result.id, e
+                                );
+                            }
+                        }
+                    }
+                    return Ok(records);
+                }
+                Ok(Err(e)) => {
+                    eprintln!(
+                        "Warning: BM25 search failed: {}. Falling back to naive matching.",
+                        e
+                    );
+                    // 继续执行回退逻辑
+                }
+                Err(join_err) => {
+                    eprintln!(
+                        "Warning: Blocking task for search panicked or was cancelled: {}. Falling back to naive matching.",
+                        join_err
+                    );
+                    // 继续执行回退逻辑
+                }
+            }
+        }
+
+        // 回退逻辑：朴素文本匹配搜索
         let mut scored_records = Vec::new();
         let mut entries = fs::read_dir(&self.data_dir).await?;
 
@@ -151,15 +239,37 @@ impl KnowledgeStore {
         }
 
         // 按匹配分数降序排序，分数相同时使用 ID 作为确定性 tie-breaker
-        scored_records.sort_by(|a, b| {
-            b.1.cmp(&a.1)
-                .then_with(|| a.0.id.cmp(&b.0.id))
-        });
+        scored_records.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.id.cmp(&b.0.id)));
 
         // 提取排序后的记录
         let records: Vec<KnowledgeRecord> = scored_records.into_iter().map(|(r, _)| r).collect();
 
         Ok(records)
+    }
+
+    /// 快速通过 ID 获取记录（O(1) 复杂度）
+    ///
+    /// 直接通过文件路径定位文档，避免目录遍历。
+    /// 这是 BM25 搜索后获取完整内容的首选方法。
+    ///
+    /// # 参数
+    ///
+    /// * `id` - 记录的唯一标识符
+    async fn get_by_id_fast(&self, id: &str) -> Result<Option<KnowledgeRecord>> {
+        let file_path = Path::new(&self.data_dir).join(format!("{}.json", id));
+
+        match fs::read_to_string(&file_path).await {
+            Ok(content) => {
+                let record = serde_json::from_str::<KnowledgeRecord>(&content)
+                    .context("Failed to parse knowledge record")?;
+                Ok(Some(record))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).context(format!(
+                "Failed to read record file: {}",
+                file_path.display()
+            )),
+        }
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<KnowledgeRecord>> {
@@ -230,6 +340,7 @@ impl KnowledgeStore {
                 summary: doc.summary.clone(),
                 content: doc.content.clone(),
                 source_path: doc.path.clone(),
+                keywords: vec![],
             };
 
             // 创建临时目录
@@ -301,6 +412,7 @@ impl KnowledgeStore {
                     summary: extract_summary(&slice.content),
                     content: slice.content.clone(),
                     source_path: doc.path.clone(),
+                    keywords: vec![],
                 };
 
                 // 序列化失败时清理临时目录
@@ -353,6 +465,79 @@ impl KnowledgeStore {
 
             // 步骤 4：删除临时目录（此时应该已经为空）
             Self::cleanup_temp_dir(&temp_dir).await;
+        }
+
+        // 步骤 5：同步添加文档到 Tantivy 索引
+        if let Some(indexer_mutex) = &self.indexer {
+            // 收集所有需要索引的记录
+            let mut records_to_index = Vec::new();
+
+            // 从 JSON 文件中读取记录（使用 O(1) 快速查询）
+            for id in &ids {
+                if let Ok(Some(record)) = self.get_by_id_fast(id).await {
+                    records_to_index.push(record);
+                }
+            }
+
+            // 使用 spawn_blocking 避免阻塞 Tokio 线程池
+            // Tantivy 的 add_doc 和 commit 是同步阻塞操作，必须在专用线程中执行
+            let indexer_mutex_clone = indexer_mutex.clone();
+            let index_result = tokio::task::spawn_blocking(move || {
+                // 在阻塞线程中使用 blocking_lock() 获取锁
+                let mut indexer = indexer_mutex_clone.blocking_lock();
+                let mut index_success = true;
+                let mut first_error = None;
+
+                for record in records_to_index {
+                    if let Err(e) = indexer.add_doc(&record) {
+                        first_error = Some((
+                            record.id.clone(),
+                            anyhow::anyhow!("Failed to index document: {}", e),
+                        ));
+                        index_success = false;
+                        break;
+                    }
+                }
+
+                // 提交索引
+                if index_success {
+                    if let Err(e) = indexer.commit() {
+                        first_error = Some((
+                            "commit".to_string(),
+                            anyhow::anyhow!("Failed to commit index: {}", e),
+                        ));
+                    }
+                }
+
+                first_error
+            })
+            .await;
+
+            // 处理索引错误
+            match index_result {
+                Ok(Some((error_id, error))) => {
+                    if error_id == "commit" {
+                        eprintln!(
+                            "Warning: {}. New documents may not be searchable.",
+                            error
+                        );
+                    } else {
+                        eprintln!(
+                            "Warning: Failed to index document {}. Search may be incomplete. {}",
+                            error_id, error
+                        );
+                    }
+                }
+                Ok(None) => {
+                    // 索引成功，无需操作
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Blocking task for indexing panicked or was cancelled: {}. Search may be incomplete.",
+                        e
+                    );
+                }
+            }
         }
 
         Ok(ids) // 返回所有切片的 ID（如果有切片）或单个文档 ID
