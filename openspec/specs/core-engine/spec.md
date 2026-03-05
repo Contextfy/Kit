@@ -24,66 +24,30 @@ The core engine SHALL parse markdown files and extract structured information fo
 - **则**系统返回描述性错误，指示具体失败原因
 
 ### Requirement: Knowledge Storage
-The core engine SHALL store parsed documents and their semantic chunks in a file-system based JSON storage with atomic write guarantees and support for slice-level storage. 核心引擎 SHALL 使用基于文件系统的 JSON 存储来存储解析的文档和语义块，具有原子写入保证并支持切片级别存储。
+The core engine SHALL store parsed documents and their semantic chunks in a file-system-based JSON storage with atomic write guarantees, support for slice-level storage, AND integrate Tantivy full-text search index for BM25 scoring. 核心引擎 SHALL 使用基于文件系统的 JSON 存储来存储解析的文档和语义块，具有原子写入保证、支持切片级别存储，并集成 Tantivy 全文搜索索引以进行 BM25 评分。
 
-#### Scenario: 搜索存储的切片（基于分词的匹配优化）
-
+#### Scenario: 搜索存储的切片（BM25 搜索替换朴素匹配）
 - **当**用户使用查询字符串搜索文档时
-- **则**系统执行分词匹配（按空格分割查询为多个 token）
-- **并且**计算每个记录的匹配分数：
-  - title 中每个命中 token 计 2 分
-  - summary 中每个命中 token 计 1 分
-  - title 完全匹配所有 tokens 时额外 +3 分
-  - title 部分匹配（至少 1 个且 ≥ 一半）时额外 +1 分
-- **并且**按匹配分数降序排序结果
-- **并且**跳过临时文件和目录（防御性检查）
+- **则**系统优先使用 Tantivy `Searcher` 执行 BM25 全文搜索
+- **并且**返回结果包含 BM25 相关性分数
+- **并且**结果按 BM25 分数降序排列（替代原有的分词匹配分数）
+- **如果** Tantivy 索引不可用，回退到原有的基于分词的匹配逻辑
 - **并且**返回匹配的切片记录列表（按相关性排序）
-- **并且**空查询时直接返回空结果（边界保护）
 
-#### Scenario: 创建新的知识存储
-
-- **当**用户使用目录路径初始化新的 `KnowledgeStore` 时
-- **则**系统：
-  - 在指定目录中创建存储文件夹
-  - 自动清理上次崩溃遗留的 `.temp-*` 临时目录
-  - 准备接受文档
-
-#### Scenario: 存储切片文档（切片模式）
-
-- **当**用户将包含多个切片的 `ParsedDoc` 添加到知识存储时
-- **则**系统为每个切片创建独立的 `KnowledgeRecord`，每个记录包含：
-  - `id`：切片的唯一 UUID
-  - `title`：切片的标题（H2 标题）
-  - `parent_doc_title`：父文档的标题（H1 标题或文件名）
-  - `summary`：切片内容的前 200 个字符
-  - `content`：切片的完整内容
-  - `source_path`：原始文档文件路径
-- **并且**使用原子性写入（临时文件 → 原子移动模式）确保数据完整性
+#### Scenario: 添加文档时同步更新索引
+- **当**用户将 `ParsedDoc` 添加到知识存储时
+- **则**系统在写入 JSON 文件后，同步添加文档到 Tantivy 索引
+- **并且**为每个切片调用 `Indexer::add_doc(record)`
+- **并且**在所有切片添加后调用 `Indexer::commit()` 提交索引
+- **如果**索引操作失败，记录警告但不影响 JSON 存储
 - **并且**返回所有切片的 UUID 列表
 
-#### Scenario: 存储无切片文档（回退模式）
-
-- **当**用户将不包含切片的 `ParsedDoc` 添加到知识存储时
-- **则**系统将整个文档作为单条记录存储（向后兼容）
-- **并且**记录包含：
-  - `title`：文档的完整标题
-  - `parent_doc_title`：与 `title` 相同（保持一致性）
-  - `source_path` 字段用于追溯原始文件
-
-#### Scenario: 原子性写入失败回滚
-
-- **当**写入过程中发生错误（磁盘满、权限问题等）
-- **则**系统：
-  - 删除所有已提交的文件（如果进入提交阶段）
-  - 清理临时目录
-  - 返回详细错误信息
-- **确保**不会留下孤儿数据或不完整的文件
-
-#### Scenario: 崩溃恢复
-
-- **当**系统在写入过程中崩溃并重启
-- **则**系统启动时自动扫描并清理所有 `.temp-*` 目录
-- **确保**不会积累垃圾数据
+#### Scenario: 初始化知识存储时创建索引
+- **当**用户使用目录路径初始化新的 `KnowledgeStore` 时
+- **则**系统在 `{data_dir}/.tantivy` 目录创建或打开 Tantivy 索引
+- **并且**初始化 `Indexer` 和 `Searcher` 实例
+- **如果**索引初始化失败（如权限问题），记录警告并继续运行
+- **并且**系统自动清理上次崩溃遗留的 `.temp-*` 临时目录
 
 ### Requirement: Two-Stage Retrieval
 The core engine SHALL provide scout and inspect operations for efficient context retrieval with support for chunk-level results and parent document context. 核心引擎 SHALL 提供 scout 和 inspect 操作以进行高效的上下文检索，支持块级结果和父文档上下文。
@@ -284,4 +248,70 @@ The core engine SHALL expose a public `search` module containing the Tantivy Ind
 - **当**用户编译 `contextfy-core` crate 时
 - **则**`search` 模块包含在 `lib.rs` 的导出列表中
 - **并且**外部依赖可通过 `use contextfy_core::search` 引入模块
+
+### Requirement: BM25 全文搜索索引
+The core engine SHALL provide an Indexer for adding documents to the Tantivy full-text search index with proper commit handling and error management. 核心引擎 SHALL 提供 Indexer 用于将文档添加到 Tantivy 全文搜索索引，具有正确的 commit 处理和错误管理。
+
+#### Scenario: 将 KnowledgeRecord 添加到索引
+- **当**系统调用 `Indexer::add_doc(record)` 添加知识记录时
+- **则**系统将 `KnowledgeRecord` 转换为 Tantivy `Document`
+- **并且**将以下字段映射到 Schema 字段：
+  - `record.title` → `title` 字段
+  - `record.summary` → `summary` 字段
+  - `record.content` → `content` 字段
+  - `record.keywords` → `keywords` 字段（如果存在）
+- **并且**文档被添加到索引写入缓冲区
+- **并且**返回 `Result<()>` 表示操作成功或失败
+
+#### Scenario: 提交索引使文档可搜索
+- **当**系统调用 `Indexer::commit()` 时
+- **则**系统将所有缓冲的写入操作持久化到磁盘
+- **并且**使新添加的文档立即可被搜索
+- **并且**返回 `Result<()>` 表示操作成功或失败
+- **如果** commit 失败，返回描述性错误信息
+
+#### Scenario: 处理 Tantivy 错误
+- **当**索引操作发生 Tantivy 错误时
+- **则**系统将 `TantivyError` 转换为 `anyhow::Error`
+- **并且**添加上下文信息（如文档 ID、操作类型）
+- **并且**禁止使用 `unwrap()` 或 `expect()` 直接 panic
+
+### Requirement: BM25 搜索查询
+The core engine SHALL provide a Searcher for executing BM25 full-text search queries with relevance scoring and result ordering. 核心引擎 SHALL 提供 Searcher 用于执行 BM25 全文搜索查询，具有相关性评分和结果排序。
+
+#### Scenario: 执行基本搜索查询
+- **当**用户调用 `Searcher::search(query, limit)` 时
+- **则**系统使用 `QueryParser` 解析查询字符串
+- **并且**在 `title`、`summary`、`content` 三个字段中执行搜索
+- **并且**使用 Jieba 分词器处理中文分词
+- **并且**返回最多 `limit` 个匹配结果
+
+#### Scenario: 返回带 BM25 分数的结果
+- **当**搜索查询返回结果时
+- **则**每个结果包含以下字段：
+  - `id`: 记录的唯一标识符
+  - `title`: 记录标题
+  - `summary`: 记录摘要
+  - `score`: BM25 相关性分数（f32）
+- **并且**结果按 BM25 分数降序排列
+- **并且**分数最高的结果排在第一位
+
+#### Scenario: 处理空查询
+- **当**用户传入空字符串或仅包含空白的查询时
+- **则**系统返回空结果列表 `Vec::new()`
+- **并且**不执行实际的搜索操作
+
+#### Scenario: 处理查询解析错误
+- **当**查询字符串无法被 QueryParser 解析时
+- **则**系统返回 `Err(anyhow::Error)`
+- **并且**错误信息包含原始查询字符串和解析失败原因
+
+### Requirement: Tantivy 搜索性能基准
+The core engine SHALL maintain search query latency under 100ms for knowledge bases containing 1000 documents. 核心引擎 SHALL 保持搜索查询延迟在包含 1000 个文档的知识库中低于 100ms。
+
+#### Scenario: 1000 文档搜索性能
+- **当**知识库包含 1000 个文档时
+- **并且**用户执行搜索查询
+- **则**查询延迟应 < 100ms
+- **并且**延迟测量包括：查询解析 + 搜索执行 + 结果收集
 
