@@ -175,6 +175,8 @@ impl KnowledgeStore {
         }
 
         // 回退逻辑：朴素文本匹配搜索
+        // 分数归一化系数：将朴素匹配分数（通常 1-6 分）放大到 BM25 量级（通常 0-10+ 分）
+        const FALLBACK_SCALE: f32 = 10.0;
         let mut scored_records = Vec::new();
         let mut entries = fs::read_dir(&self.data_dir).await?;
 
@@ -230,7 +232,8 @@ impl KnowledgeStore {
 
                     // 只保留至少匹配一个 token 的记录
                     if match_score > 0.0 {
-                        scored_records.push((record, match_score));
+                        let normalized_score = match_score * FALLBACK_SCALE;
+                        scored_records.push((record, normalized_score));
                     }
                 }
             }
