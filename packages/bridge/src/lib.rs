@@ -74,7 +74,9 @@ pub mod contextfy {
             Ok(vec![Brief {
                 id: "stub-id-1".to_string(),
                 title: "Stub Result".to_string(),
+                parent_doc_title: "Stub Doc".to_string(),
                 summary: "This is a stub implementation".to_string(),
+                score: 0.85,
             }])
         }
 
@@ -117,15 +119,21 @@ pub use contextfy::ContextfyKit;
 ///
 /// * `id` - Unique identifier for the record
 /// * `title` - Title of the record
+/// * `parent_doc_title` - Title of the parent document
 /// * `summary` - Brief summary of the content (first 200 characters)
+/// * `score` - BM25 relevance score
 #[napi(object)]
 pub struct Brief {
     /// Unique identifier for the record
     pub id: String,
     /// Title of the record
     pub title: String,
+    /// Title of the parent document
+    pub parent_doc_title: String,
     /// Brief summary of the content (first 200 characters)
     pub summary: String,
+    /// BM25 relevance score (f64 for NAPI compatibility)
+    pub score: f64,
 }
 
 /// Detailed information about a knowledge record.

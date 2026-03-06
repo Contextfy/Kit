@@ -2,8 +2,8 @@ use crate::parser::{extract_summary, ParsedDoc};
 use crate::search::{create_index, Indexer, Searcher};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::fs;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -120,7 +120,7 @@ impl KnowledgeStore {
         let _ = fs::remove_dir_all(temp_dir).await;
     }
 
-    pub async fn search(&self, query: &str) -> Result<Vec<KnowledgeRecord>> {
+    pub async fn search(&self, query: &str) -> Result<Vec<(KnowledgeRecord, f32)>> {
         // 优先使用 Tantivy Searcher 执行 BM25 搜索
         if let Some(searcher) = &self.searcher {
             // 使用 spawn_blocking 避免阻塞 Tokio 线程池
@@ -128,20 +128,18 @@ impl KnowledgeStore {
             let searcher_clone = Arc::clone(searcher);
             let query_owned = query.to_string();
 
-            let search_result = tokio::task::spawn_blocking(move || {
-                searcher_clone.search(&query_owned, 100)
-            })
-            .await;
+            let search_result =
+                tokio::task::spawn_blocking(move || searcher_clone.search(&query_owned, 100)).await;
 
             match search_result {
                 Ok(Ok(search_results)) => {
-                    // 将 SearchResult 转换为 KnowledgeRecord
+                    // 将 SearchResult 转换为 (KnowledgeRecord, f32) 元组
                     // SearchResult.id 现在包含真实的 record.id，直接使用 O(1) 查询
                     let mut records = Vec::new();
                     for result in search_results {
                         match self.get_by_id_fast(&result.id).await {
                             Ok(Some(record)) => {
-                                records.push(record);
+                                records.push((record, result.score));
                             }
                             Ok(None) => {
                                 eprintln!(
@@ -208,30 +206,30 @@ impl KnowledgeStore {
                     let title_lower = record.title.to_lowercase();
                     let summary_lower = record.summary.to_lowercase();
 
-                    let mut match_score = 0;
+                    let mut match_score: f32 = 0.0;
                     let mut title_matches = 0;
 
                     for token in &query_tokens {
                         // title 中的匹配权重为 2
                         if title_lower.contains(token) {
-                            match_score += 2;
+                            match_score += 2.0;
                             title_matches += 1;
                         }
                         // summary 中的匹配权重为 1
                         if summary_lower.contains(token) {
-                            match_score += 1;
+                            match_score += 1.0;
                         }
                     }
 
                     // 奖励：如果 title 包含所有 tokens，给予额外加分
                     if title_matches == query_tokens.len() {
-                        match_score += 3; // 完全匹配奖励
+                        match_score += 3.0; // 完全匹配奖励
                     } else if title_matches > 0 && title_matches >= query_tokens.len().div_ceil(2) {
-                        match_score += 1; // 部分匹配奖励（必须至少命中 1 个）
+                        match_score += 1.0; // 部分匹配奖励（必须至少命中 1 个）
                     }
 
                     // 只保留至少匹配一个 token 的记录
-                    if match_score > 0 {
+                    if match_score > 0.0 {
                         scored_records.push((record, match_score));
                     }
                 }
@@ -239,12 +237,14 @@ impl KnowledgeStore {
         }
 
         // 按匹配分数降序排序，分数相同时使用 ID 作为确定性 tie-breaker
-        scored_records.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.id.cmp(&b.0.id)));
+        scored_records.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.id.cmp(&b.0.id))
+        });
 
-        // 提取排序后的记录
-        let records: Vec<KnowledgeRecord> = scored_records.into_iter().map(|(r, _)| r).collect();
-
-        Ok(records)
+        // 返回排序后的 (record, score) 元组列表
+        Ok(scored_records)
     }
 
     /// 快速通过 ID 获取记录（O(1) 复杂度）
@@ -517,10 +517,7 @@ impl KnowledgeStore {
             match index_result {
                 Ok(Some((error_id, error))) => {
                     if error_id == "commit" {
-                        eprintln!(
-                            "Warning: {}. New documents may not be searchable.",
-                            error
-                        );
+                        eprintln!("Warning: {}. New documents may not be searchable.", error);
                     } else {
                         eprintln!(
                             "Warning: Failed to index document {}. Search may be incomplete. {}",
