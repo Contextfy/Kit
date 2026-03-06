@@ -12,12 +12,14 @@ use serde::{Deserialize, Serialize};
 /// * `title` - 记录标题
 /// * `parent_doc_title` - 父文档的标题
 /// * `summary` - 内容摘要（智能提取首段或代码块，最多 1000 字符）
+/// * `score` - BM25 相关性分数
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Brief {
     pub id: String,
     pub title: String,
     pub parent_doc_title: String,
     pub summary: String,
+    pub score: f32,
 }
 
 /// 知识记录的详细信息
@@ -78,16 +80,17 @@ impl<'a> Retriever<'a> {
     ///
     /// # 返回值
     ///
-    /// 返回匹配的记录列表（包含简要信息）。
+    /// 返回匹配的记录列表（包含简要信息和 BM25 相关性分数）。
     pub async fn scout(&self, query: &str) -> Result<Vec<Brief>> {
         let records = self.store.search(query).await?;
         Ok(records
             .into_iter()
-            .map(|r| Brief {
+            .map(|(r, score)| Brief {
                 id: r.id,
                 title: r.title,
                 parent_doc_title: r.parent_doc_title,
                 summary: r.summary,
+                score,
             })
             .collect())
     }

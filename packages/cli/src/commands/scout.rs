@@ -1,4 +1,5 @@
 use anyhow::Result;
+use colored::Colorize;
 use contextfy_core::{KnowledgeStore, Retriever};
 
 /// 搜索知识库
@@ -40,7 +41,23 @@ pub async fn scout(query: String) -> Result<()> {
                     } else {
                         format!("[{}] {}", result.parent_doc_title, result.title)
                     };
-                    println!("\n[{}] {}", i + 1, display_title);
+
+                    // 根据分数使用不同颜色高亮
+                    let score_display = format!("{:.2}", result.score);
+                    let colored_score = if result.score >= 5.0 {
+                        score_display.green().bold()
+                    } else if result.score >= 2.0 {
+                        score_display.yellow().bold()
+                    } else {
+                        score_display.white().dimmed()
+                    };
+
+                    println!(
+                        "\n[{}] {} | {}",
+                        i + 1,
+                        format!("Score: {}", colored_score).cyan(),
+                        display_title
+                    );
                     println!("    ID: {}", result.id);
                     println!("    Summary: {}", result.summary);
                 }
