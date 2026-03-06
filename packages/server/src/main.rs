@@ -67,7 +67,7 @@ async fn search_handler(
     println!("Search query: {}", params.q);
 
     let guard = store.lock().await;
-    let retriever = Retriever::new(&*guard);
+    let retriever = Retriever::new(&guard);
 
     let results = retriever.scout(&params.q).await;
 
@@ -100,7 +100,7 @@ async fn document_handler(
     println!("Fetching document: {}", doc_id);
 
     let guard = store.lock().await;
-    let retriever = Retriever::new(&*guard);
+    let retriever = Retriever::new(&guard);
 
     let result = retriever.inspect(&doc_id).await;
 
