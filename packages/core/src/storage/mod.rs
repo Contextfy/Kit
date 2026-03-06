@@ -1,9 +1,9 @@
-use crate::parser::{extract_summary, ParsedDoc};
+use crate::parser::{extract_code_block_keywords, extract_summary, ParsedDoc};
 use crate::search::{create_index, Indexer, Searcher};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::fs;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -128,10 +128,8 @@ impl KnowledgeStore {
             let searcher_clone = Arc::clone(searcher);
             let query_owned = query.to_string();
 
-            let search_result = tokio::task::spawn_blocking(move || {
-                searcher_clone.search(&query_owned, 100)
-            })
-            .await;
+            let search_result =
+                tokio::task::spawn_blocking(move || searcher_clone.search(&query_owned, 100)).await;
 
             match search_result {
                 Ok(Ok(search_results)) => {
@@ -333,6 +331,10 @@ impl KnowledgeStore {
             //
             // 使用临时文件模式确保原子性：写入临时文件 -> 原子重命名
             let id = Uuid::new_v4().to_string();
+
+            // 从内容中提取代码块关键词
+            let keywords = extract_code_block_keywords(&doc.content);
+
             let record = KnowledgeRecord {
                 id: id.clone(),
                 title: doc.title.clone(),
@@ -340,7 +342,7 @@ impl KnowledgeStore {
                 summary: doc.summary.clone(),
                 content: doc.content.clone(),
                 source_path: doc.path.clone(),
-                keywords: vec![],
+                keywords,
             };
 
             // 创建临时目录
@@ -404,6 +406,9 @@ impl KnowledgeStore {
                 let id = Uuid::new_v4().to_string();
                 let temp_path = temp_dir.join(format!("{}.json", id));
 
+                // 从切片内容中提取代码块关键词
+                let keywords = extract_code_block_keywords(&slice.content);
+
                 // 序列化并写入临时文件
                 let record = KnowledgeRecord {
                     id: id.clone(),
@@ -412,7 +417,7 @@ impl KnowledgeStore {
                     summary: extract_summary(&slice.content),
                     content: slice.content.clone(),
                     source_path: doc.path.clone(),
-                    keywords: vec![],
+                    keywords,
                 };
 
                 // 序列化失败时清理临时目录
@@ -517,10 +522,7 @@ impl KnowledgeStore {
             match index_result {
                 Ok(Some((error_id, error))) => {
                     if error_id == "commit" {
-                        eprintln!(
-                            "Warning: {}. New documents may not be searchable.",
-                            error
-                        );
+                        eprintln!("Warning: {}. New documents may not be searchable.", error);
                     } else {
                         eprintln!(
                             "Warning: Failed to index document {}. Search may be incomplete. {}",
