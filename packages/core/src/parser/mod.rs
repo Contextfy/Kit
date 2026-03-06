@@ -1,7 +1,10 @@
 use anyhow::Result;
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag};
+use regex::Regex;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 
 /// 智能提取内容摘要
 ///
@@ -74,6 +77,218 @@ pub fn extract_summary(content: &str) -> String {
     };
 
     truncated.trim().to_string()
+}
+
+/// 从 Markdown 内容中提取代码块关键词
+///
+/// 严格限制在 ``` 代码块内部提取标识符，避免误匹配正文。
+///
+/// # 提取逻辑
+///
+/// 1. 使用 pulldown-cmark 解析器识别代码块（``` 围栏内容）
+/// 2. 对每个代码块应用正则模式提取标识符：
+///    - 函数名：`fn function_name(`、`def function_name(`、`function function_name(`
+///    - 类/类型名：`class ClassName`、`struct StructName`、`interface InterfaceName`
+///    - CamelCase/PascalCase 标识符
+/// 3. 过滤常见编程语言关键字和短标识符
+/// 4. 去重并排序返回
+///
+/// # 性能优化
+///
+/// 所有正则表达式使用 `OnceLock` 缓存，避免重复编译。
+///
+/// # 参数
+///
+/// - `content`: Markdown 内容字符串
+///
+/// # 返回
+///
+/// 去重排序后的关键词列表
+///
+/// # 示例
+///
+/// ```ignore
+/// let content = r#"
+/// ```rust
+/// pub fn create_item() -> Result<Item> {
+///     let item = Item::new();
+///     Ok(item)
+/// }
+/// ```
+/// "#;
+/// let keywords = extract_code_block_keywords(content);
+/// assert!(keywords.contains(&"create_item".to_string()));
+/// assert!(keywords.contains(&"Item".to_string()));
+/// ```
+pub fn extract_code_block_keywords(content: &str) -> Vec<String> {
+    // 零拷贝优化：使用 &str 而非 String，避免循环内的 .to_string() 堆分配
+    // 但由于 code_block_content 在循环中被重用，我们需要在每次代码块处理后立即转换为 String
+    let mut keywords: HashSet<String> = HashSet::new();
+
+    // 使用缓存的正则表达式
+    let function_regex = get_function_regex();
+    let class_regex = get_class_regex();
+    let camelcase_regex = get_camelcase_regex();
+    let snakecase_regex = get_snakecase_regex();
+
+    // 解析 Markdown，提取代码块
+    let parser = Parser::new(content);
+    let mut in_code_block = false;
+    let mut code_block_content = String::new();
+
+    for event in parser {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => {
+                in_code_block = true;
+                code_block_content.clear();
+            }
+            Event::End(Tag::CodeBlock(_)) => {
+                // 提取当前代码块的关键词（临时 HashSet，零拷贝）
+                let mut block_keywords: HashSet<&str> = HashSet::new();
+                extract_identifiers_from_code(
+                    &code_block_content,
+                    function_regex,
+                    class_regex,
+                    camelcase_regex,
+                    snakecase_regex,
+                    &mut block_keywords,
+                );
+
+                // 立即转换为拥有所有权的 String，避免引用失效
+                for kw in block_keywords {
+                    if !is_language_keyword(kw) && kw.len() >= 3 {
+                        keywords.insert(kw.to_string());
+                    }
+                }
+
+                in_code_block = false;
+                code_block_content.clear();
+            }
+            Event::Text(text) | Event::Code(text) if in_code_block => {
+                code_block_content.push_str(&text);
+            }
+            _ => {}
+        }
+    }
+
+    // 转换为排序后的 Vec
+    let mut result: Vec<String> = keywords.into_iter().collect();
+    result.sort();
+    result
+}
+
+/// 从代码块内容中提取标识符（零拷贝版本）
+fn extract_identifiers_from_code<'a>(
+    code: &'a str,
+    function_regex: &Regex,
+    class_regex: &Regex,
+    camelcase_regex: &Regex,
+    snakecase_regex: &Regex,
+    keywords: &mut HashSet<&'a str>,
+) {
+    // 提取函数名（零拷贝：直接插入 &str）
+    for caps in function_regex.captures_iter(code) {
+        if let Some(name) = caps.get(2) {
+            keywords.insert(name.as_str());
+        }
+    }
+
+    // 提取类/类型名（零拷贝：直接插入 &str）
+    for caps in class_regex.captures_iter(code) {
+        if let Some(name) = caps.get(2) {
+            keywords.insert(name.as_str());
+        }
+    }
+
+    // 提取 CamelCase/PascalCase 标识符（零拷贝：直接插入 &str）
+    for caps in camelcase_regex.captures_iter(code) {
+        if let Some(name) = caps.get(0) {
+            let word = name.as_str();
+            // 过滤常见的大写单词
+            if !is_common_camelcase_word(word) {
+                keywords.insert(word);
+            }
+        }
+    }
+
+    // 提取 snake_case 标识符（零拷贝：直接插入 &str）
+    for caps in snakecase_regex.captures_iter(code) {
+        if let Some(name) = caps.get(0) {
+            keywords.insert(name.as_str());
+        }
+    }
+}
+
+/// 获取缓存的函数名正则表达式
+fn get_function_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        // 匹配：fn name(、function name(、def name(
+        Regex::new(r"\b(fn|function|def)\s+(\w+)\s*\(").unwrap()
+    })
+}
+
+/// 获取缓存的类/类型名正则表达式
+fn get_class_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        // 匹配：class Name、struct Name、interface Name、type Name、enum Name
+        Regex::new(r"\b(class|struct|interface|type|enum)\s+(\w+)").unwrap()
+    })
+}
+
+/// 获取缓存的 CamelCase/PascalCase 正则表达式
+fn get_camelcase_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        // 匹配以大写字母开头的单词
+        Regex::new(r"\b[A-Z][a-zA-Z0-9]*\b").unwrap()
+    })
+}
+
+/// 获取缓存的 snake_case 正则表达式
+fn get_snakecase_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        // 匹配 snake_case 标识符和普通小写标识符
+        // 至少 3 个字符，支持纯小写或带下划线的命名
+        Regex::new(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)*\b").unwrap()
+    })
+}
+
+/// 检查是否是编程语言关键字（O(log N) 二分查找）
+fn is_language_keyword(word: &str) -> bool {
+    // 常见的编程语言关键字（按字母序排序，支持二分查找）
+    // 注意：已移除 map, new, range 等常用 API 名称，避免误杀
+    const KEYWORDS: &[&str] = &[
+        "and", "as", "assert", "async", "await", "break", "case", "catch", "class", "const",
+        "continue", "debugger", "def", "default", "del", "defer", "do", "elif", "else", "enum",
+        "except", "export", "extends", "fallthrough", "false", "finally", "fn", "for", "from",
+        "func", "global", "goto", "if", "impl", "import", "in", "instanceof", "interface", "is",
+        "lambda", "let", "loop", "match", "mod", "move", "mut", "nonlocal", "not", "null", "of",
+        "or", "package", "pass", "pub", "raise", "ref", "return", "select", "static", "struct",
+        "super", "switch", "trait", "true", "try", "type", "typeof", "use", "var", "void", "where",
+        "while", "with", "yield",
+    ];
+
+    KEYWORDS.binary_search(&word).is_ok()
+}
+
+/// 检查是否是常见的 CamelCase 单词（应该被过滤）
+///
+/// 这些是英文句子中常见的大写单词，不应该作为关键词提取
+/// 使用 O(log N) 二分查找
+fn is_common_camelcase_word(word: &str) -> bool {
+    // 常见的句首大写单词（按字母序排序，支持二分查找）
+    const COMMON_WORDS: &[&str] = &[
+        "A", "An", "And", "Are", "As", "At", "Be", "Been", "Being", "But", "By", "Can", "Could",
+        "Did", "Do", "Does", "Example", "For", "From", "Had", "Has", "Have", "How", "In", "Input",
+        "Is", "It", "Its", "May", "Might", "Must", "Not", "Note", "Of", "On", "Or", "Output",
+        "Shall", "Should", "Than", "That", "The", "Then", "These", "This", "Those", "To", "Usage",
+        "Was", "Were", "What", "When", "Which", "Who", "Why", "Will", "With", "Would",
+    ];
+
+    COMMON_WORDS.binary_search(&word).is_ok()
 }
 
 /// 查找代码块结束位置
@@ -791,6 +1006,218 @@ Some content.
         assert_eq!(slices[1].section_title, "Section Two");
         assert!(slices[0].content.contains("Content for section one"));
         assert!(slices[1].content.contains("Content for section two"));
+    }
+
+    // 关键词提取测试
+    #[test]
+    fn test_extract_function_names() {
+        let content = r#"
+```rust
+pub fn create_item() -> Result<Item> {
+    let item = Item::new();
+    Ok(item)
+}
+
+fn process_data(data: &str) -> String {
+    data.to_string()
+}
+```
+"#;
+
+        let keywords = extract_code_block_keywords(content);
+        assert!(keywords.contains(&"create_item".to_string()));
+        assert!(keywords.contains(&"process_data".to_string()));
+    }
+
+    #[test]
+    fn test_extract_class_names() {
+        let content = r#"
+```typescript
+class BlockCustomComponent {
+    render() {
+        return null;
+    }
+}
+
+interface UserProfile {
+    name: string;
+}
+
+struct Config {
+    debug: bool,
+}
+```
+"#;
+
+        let keywords = extract_code_block_keywords(content);
+        assert!(keywords.contains(&"BlockCustomComponent".to_string()));
+        assert!(keywords.contains(&"UserProfile".to_string()));
+        assert!(keywords.contains(&"Config".to_string()));
+    }
+
+    #[test]
+    fn test_extract_deduplication() {
+        let content = r#"
+```rust
+fn process() {
+    let process = Process::new();
+    process.run();
+}
+```
+"#;
+
+        let keywords = extract_code_block_keywords(content);
+        // 去重后应该只有一个 "process"
+        let process_count = keywords.iter().filter(|k| *k == "process").count();
+        assert_eq!(process_count, 1);
+    }
+
+    #[test]
+    fn test_extract_filters_keywords() {
+        let content = r#"
+```rust
+fn main() {
+    let mut value = 42;
+    const MAX: i32 = 100;
+    return value;
+}
+```
+"#;
+
+        let keywords = extract_code_block_keywords(content);
+        // 应该过滤掉 fn、let、mut、const、return 等关键字
+        assert!(!keywords.contains(&"fn".to_string()));
+        assert!(!keywords.contains(&"let".to_string()));
+        assert!(!keywords.contains(&"mut".to_string()));
+        assert!(!keywords.contains(&"const".to_string()));
+        assert!(!keywords.contains(&"return".to_string()));
+        // 应该保留函数名 main 和常量名 MAX（CamelCase）
+        assert!(keywords.contains(&"main".to_string()));
+        assert!(keywords.contains(&"MAX".to_string()));
+        // 注意：value 不会被提取，因为它不是函数名、类名，也不是 CamelCase
+    }
+
+    #[test]
+    fn test_extract_filters_short_identifiers() {
+        let content = r#"
+```rust
+fn foo() {
+    let a = 1;
+    let b = 2;
+    let id = 123;
+}
+```
+"#;
+
+        let keywords = extract_code_block_keywords(content);
+        // 应该过滤掉短标识符（< 3 字符）
+        assert!(!keywords.contains(&"a".to_string()));
+        assert!(!keywords.contains(&"b".to_string()));
+        assert!(!keywords.contains(&"id".to_string()));
+        // 但应该保留 foo 和其他 >= 3 字符的标识符
+        assert!(keywords.contains(&"foo".to_string()));
+    }
+
+    #[test]
+    fn test_extract_filters_common_camelcase_words() {
+        let content = r#"
+```rust
+// The function handles the data
+fn process_data() {
+    // This is a comment about Item
+    let item = Item::new();
+}
+```
+"#;
+
+        let keywords = extract_code_block_keywords(content);
+        // 应该过滤掉 The、This 等常见大写单词
+        assert!(!keywords.contains(&"The".to_string()));
+        assert!(!keywords.contains(&"This".to_string()));
+        // 但应该保留 Item（类型名）
+        assert!(keywords.contains(&"Item".to_string()));
+    }
+
+    #[test]
+    fn test_extract_no_code_blocks() {
+        let content = r#"
+This is a regular paragraph.
+
+The function createItem is mentioned in plain text.
+
+Another paragraph with some words.
+"#;
+
+        let keywords = extract_code_block_keywords(content);
+        // 没有代码块，应该返回空列表
+        assert!(keywords.is_empty());
+    }
+
+    #[test]
+    fn test_extract_multiple_code_blocks() {
+        let content = r#"
+```rust
+fn create_item() -> Item {
+    Item::new()
+}
+```
+
+Some text in between.
+
+```javascript
+function buildServer() {
+    return new Server();
+}
+```
+"#;
+
+        let keywords = extract_code_block_keywords(content);
+        // 应该从两个代码块中提取关键词
+        assert!(keywords.contains(&"create_item".to_string()));
+        assert!(keywords.contains(&"Item".to_string()));
+        assert!(keywords.contains(&"buildServer".to_string()));
+        assert!(keywords.contains(&"Server".to_string()));
+    }
+
+    #[test]
+    fn test_extract_sorted_output() {
+        let content = r#"
+```rust
+fn zebra() {}
+fn apple() {}
+fn banana() {}
+```
+"#;
+
+        let keywords = extract_code_block_keywords(content);
+        // 结果应该是排序的
+        let mut sorted_keywords = keywords.clone();
+        sorted_keywords.sort();
+        assert_eq!(keywords, sorted_keywords);
+    }
+
+    #[test]
+    fn test_extract_snake_case_identifiers() {
+        let content = r#"
+```rust
+fn create_item() {
+    let map = HashMap::new();
+    let range = 0..10;
+    process_data(&map, &range);
+}
+```
+"#;
+
+        let keywords = extract_code_block_keywords(content);
+        // 应该提取 snake_case 标识符
+        assert!(keywords.contains(&"create_item".to_string()));
+        assert!(keywords.contains(&"process_data".to_string()));
+        // 应该提取 HashMap（CamelCase 类型名）
+        assert!(keywords.contains(&"HashMap".to_string()));
+        // 关键修复：map, new, range 不应该被过滤（它们是常用 API 名称）
+        assert!(keywords.contains(&"map".to_string()), "map 应该被提取，它是常用 API 名称");
+        assert!(keywords.contains(&"new".to_string()), "new 应该被提取，它是常用 API 名称");
+        assert!(keywords.contains(&"range".to_string()), "range 应该被提取，它是常用 API 名称");
     }
 }
 

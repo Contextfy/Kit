@@ -316,6 +316,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "pulldown-cmark",
+ "regex",
  "serde",
  "serde_json",
  "tantivy",
