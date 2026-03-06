@@ -185,12 +185,22 @@ impl Indexer {
             .schema
             .get_field(FIELD_CONTENT)
             .context("Missing content field")?;
+        let keywords_field = self
+            .schema
+            .get_field(FIELD_KEYWORDS)
+            .context("Missing keywords field")?;
 
         let mut doc = TantivyDocument::new();
         doc.add_text(id_field, &record.id);
         doc.add_text(title_field, &record.title);
         doc.add_text(summary_field, &record.summary);
         doc.add_text(content_field, &record.content);
+
+        // 多值字段插入：每个关键词作为单独的值插入
+        // Tantivy 原生支持同一字段插入多个值，比拼接字符串更高效
+        for keyword in &record.keywords {
+            doc.add_text(keywords_field, keyword);
+        }
 
         self.writer
             .add_document(doc)
@@ -249,7 +259,7 @@ impl Searcher {
             .try_into()
             .context("Failed to create index reader")?;
 
-        // 创建查询解析器：在 title、summary、content 三个字段中搜索
+        // 创建查询解析器：在 title、summary、content、keywords 四个字段中搜索
         let title_field = schema
             .get_field(FIELD_TITLE)
             .context("Missing title field")?;
@@ -259,9 +269,18 @@ impl Searcher {
         let content_field = schema
             .get_field(FIELD_CONTENT)
             .context("Missing content field")?;
+        let keywords_field = schema
+            .get_field(FIELD_KEYWORDS)
+            .context("Missing keywords field")?;
 
-        let query_parser =
-            QueryParser::for_index(&index, vec![title_field, summary_field, content_field]);
+        let mut query_parser = QueryParser::for_index(
+            &index,
+            vec![title_field, summary_field, content_field, keywords_field],
+        );
+
+        // 为 keywords 字段设置高权重（5.0），确保精确的 API 名称匹配排在最前面
+        // 这样当用户搜索 "createItem" 时，在代码块中包含该名称的文档会显著高于仅在正文中提及的文档
+        query_parser.set_field_boost(keywords_field, 5.0);
 
         // CRITICAL: 使用索引中注册的 jieba 分词器
         // QueryParser 会自动使用 Index 中注册的 jieba 分词器进行中文分词
