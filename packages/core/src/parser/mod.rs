@@ -129,6 +129,7 @@ pub fn extract_code_block_keywords(content: &str) -> Vec<String> {
     let function_regex = get_function_regex();
     let class_regex = get_class_regex();
     let camelcase_regex = get_camelcase_regex();
+    let snakecase_regex = get_snakecase_regex();
 
     // 解析 Markdown，提取代码块
     let parser = Parser::new(content);
@@ -149,6 +150,7 @@ pub fn extract_code_block_keywords(content: &str) -> Vec<String> {
                     function_regex,
                     class_regex,
                     camelcase_regex,
+                    snakecase_regex,
                     &mut block_keywords,
                 );
 
@@ -181,6 +183,7 @@ fn extract_identifiers_from_code<'a>(
     function_regex: &Regex,
     class_regex: &Regex,
     camelcase_regex: &Regex,
+    snakecase_regex: &Regex,
     keywords: &mut HashSet<&'a str>,
 ) {
     // 提取函数名（零拷贝：直接插入 &str）
@@ -205,6 +208,13 @@ fn extract_identifiers_from_code<'a>(
             if !is_common_camelcase_word(word) {
                 keywords.insert(word);
             }
+        }
+    }
+
+    // 提取 snake_case 标识符（零拷贝：直接插入 &str）
+    for caps in snakecase_regex.captures_iter(code) {
+        if let Some(name) = caps.get(0) {
+            keywords.insert(name.as_str());
         }
     }
 }
@@ -236,87 +246,29 @@ fn get_camelcase_regex() -> &'static Regex {
     })
 }
 
+/// 获取缓存的 snake_case 正则表达式
+fn get_snakecase_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        // 匹配 snake_case 标识符和普通小写标识符
+        // 至少 3 个字符，支持纯小写或带下划线的命名
+        Regex::new(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)*\b").unwrap()
+    })
+}
+
 /// 检查是否是编程语言关键字（O(log N) 二分查找）
 fn is_language_keyword(word: &str) -> bool {
     // 常见的编程语言关键字（按字母序排序，支持二分查找）
+    // 注意：已移除 map, new, range 等常用 API 名称，避免误杀
     const KEYWORDS: &[&str] = &[
-        "and",
-        "as",
-        "assert",
-        "async",
-        "await",
-        "break",
-        "case",
-        "catch",
-        "class",
-        "const",
-        "continue",
-        "debugger",
-        "def",
-        "default",
-        "del",
-        "defer",
-        "do",
-        "elif",
-        "else",
-        "enum",
-        "except",
-        "export",
-        "extends",
-        "fallthrough",
-        "false",
-        "finally",
-        "fn",
-        "for",
-        "from",
-        "func",
-        "global",
-        "goto",
-        "if",
-        "impl",
-        "import",
-        "in",
-        "instanceof",
-        "interface",
-        "is",
-        "lambda",
-        "let",
-        "loop",
-        "map",
-        "match",
-        "mod",
-        "move",
-        "mut",
-        "new",
-        "nonlocal",
-        "not",
-        "null",
-        "of",
-        "or",
-        "package",
-        "pass",
-        "pub",
-        "raise",
-        "range",
-        "ref",
-        "return",
-        "select",
-        "static",
-        "struct",
-        "super",
-        "switch",
-        "trait",
-        "true",
-        "try",
-        "type",
-        "typeof",
-        "use",
-        "var",
-        "void",
-        "where",
-        "while",
-        "with",
-        "yield",
+        "and", "as", "assert", "async", "await", "break", "case", "catch", "class", "const",
+        "continue", "debugger", "def", "default", "del", "defer", "do", "elif", "else", "enum",
+        "except", "export", "extends", "fallthrough", "false", "finally", "fn", "for", "from",
+        "func", "global", "goto", "if", "impl", "import", "in", "instanceof", "interface", "is",
+        "lambda", "let", "loop", "match", "mod", "move", "mut", "nonlocal", "not", "null", "of",
+        "or", "package", "pass", "pub", "raise", "ref", "return", "select", "static", "struct",
+        "super", "switch", "trait", "true", "try", "type", "typeof", "use", "var", "void", "where",
+        "while", "with", "yield",
     ];
 
     KEYWORDS.binary_search(&word).is_ok()
@@ -1242,6 +1194,30 @@ fn banana() {}
         let mut sorted_keywords = keywords.clone();
         sorted_keywords.sort();
         assert_eq!(keywords, sorted_keywords);
+    }
+
+    #[test]
+    fn test_extract_snake_case_identifiers() {
+        let content = r#"
+```rust
+fn create_item() {
+    let map = HashMap::new();
+    let range = 0..10;
+    process_data(&map, &range);
+}
+```
+"#;
+
+        let keywords = extract_code_block_keywords(content);
+        // 应该提取 snake_case 标识符
+        assert!(keywords.contains(&"create_item".to_string()));
+        assert!(keywords.contains(&"process_data".to_string()));
+        // 应该提取 HashMap（CamelCase 类型名）
+        assert!(keywords.contains(&"HashMap".to_string()));
+        // 关键修复：map, new, range 不应该被过滤（它们是常用 API 名称）
+        assert!(keywords.contains(&"map".to_string()), "map 应该被提取，它是常用 API 名称");
+        assert!(keywords.contains(&"new".to_string()), "new 应该被提取，它是常用 API 名称");
+        assert!(keywords.contains(&"range".to_string()), "range 应该被提取，它是常用 API 名称");
     }
 }
 

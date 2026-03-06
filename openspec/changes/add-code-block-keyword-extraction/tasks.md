@@ -149,3 +149,18 @@ fn get_function_regex() -> &'static Regex {
 - 正则表达式只编译一次，全局复用
 - 避免在循环中重复编译相同的模式
 - 符合 Rust 零成本抽象的原则
+
+### 4. PR 文档完善
+**实现**：准备详细的 Pull Request 模板
+- 变更说明：详细描述 Issue #10 的实现目标和核心功能
+- 变更类型：勾选所有适用选项（新功能、性能优化、文档更新、重构）
+- 任务清单：确认所有质量门禁通过（fmt、clippy、test）
+- 测试说明：提供完整测试命令和覆盖情况（9 个单元测试、45/45 通过）
+- 性能提升对比表：列出 O(N)→O(log N)、OnceLock 缓存、零拷贝等优化
+- 相关文档：链接到 Issue #10、OpenSpec 提案、规范变更文档
+- 文件变更清单：详细列出所有修改的文件和功能点
+- 破坏性变更说明：确认向后兼容，无迁移成本
+- 补充说明：突出架构师建议采纳（多值字段插入、严防正则污染）
+
+**PR 链接**：
+https://github.com/double-god/Kit/pull/new/feature/issue-10-keyword-extraction
