@@ -1,7 +1,7 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
-### Requirement: CLI scout 命令显示父文档信息
-CLI SHALL display search results with parent document context and BM25 relevance scores. CLI SHALL 显示带有父文档上下文和 BM25 相关性分数的搜索结果。
+### Requirement: CLI scout 命令显示分数和颜色高亮
+CLI SHALL display search results with BM25 relevance scores and terminal color highlighting. CLI SHALL 显示带有 BM25 相关性分数和终端颜色高亮的搜索结果。
 
 #### Scenario: 显示带分数的搜索结果
 - **当**用户执行 CLI scout 命令时
