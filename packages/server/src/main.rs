@@ -6,7 +6,7 @@ use axum::{
 use contextfy_core::{KnowledgeStore, Retriever};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tower_http::services::ServeDir;
 
 #[derive(Debug, Deserialize)]
@@ -33,11 +33,11 @@ struct DocumentResponse {
     content: String,
 }
 
-type AppState = Arc<Mutex<KnowledgeStore>>;
+type AppState = Arc<RwLock<KnowledgeStore>>;
 
 #[tokio::main]
 async fn main() {
-    let store = Arc::new(Mutex::new(
+    let store = Arc::new(RwLock::new(
         KnowledgeStore::new(".contextfy/data").await.unwrap(),
     ));
 
@@ -66,7 +66,7 @@ async fn search_handler(
 ) -> Json<SearchResponse> {
     println!("Search query: {}", params.q);
 
-    let guard = store.lock().await;
+    let guard = store.read().await;
     let retriever = Retriever::new(&guard);
 
     let results = retriever.scout(&params.q).await;
@@ -99,7 +99,7 @@ async fn document_handler(
 ) -> Json<DocumentResponse> {
     println!("Fetching document: {}", doc_id);
 
-    let guard = store.lock().await;
+    let guard = store.read().await;
     let retriever = Retriever::new(&guard);
 
     let result = retriever.inspect(&doc_id).await;
