@@ -21,3 +21,4 @@ regex = "1"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+chrono = "0.4"
