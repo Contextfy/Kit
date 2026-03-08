@@ -7,11 +7,11 @@ The core engine SHALL provide an automated evaluation harness to quantify BM25 s
 #### Scenario: 运行 A/B 搜索效果评估测试
 
 - **当**开发者运行集成测试 `cargo test --test evaluation_test` 时
-- **则**系统加载 15-20 篇硬编码的模拟 Minecraft 模组开发文档
+- **则**系统加载 18 篇硬编码的模拟 Minecraft 模组开发文档
 - **并且**系统对预定义的 10 个查询同时执行 M1 朴素匹配和 BM25 搜索
 - **并且**系统对比两者的 Top-3 结果与人工标注的 Ground Truth
 - **并且**系统计算 Accuracy@3、NDCG@3、Hit Rate@3 三项指标
-- **并且**系统在根目录生成 `BM25_EVALUATION_REPORT.md` 报告文件
+- **并且**系统在 `docs/` 目录生成 `BM25_EVALUATION_REPORT.md` 报告文件
 - **并且**系统断言 BM25 的 Top-3 准确率必须 > 70%（质量门禁）
 
 #### Scenario: M1 朴素匹配搜索实现（基线对比）
@@ -41,7 +41,7 @@ The core engine SHALL provide an automated evaluation harness to quantify BM25 s
 - **并且**返回布尔值：有命中则为 1.0，否则为 0.0
 - **当**评估脚手架计算 `ndcg_at_k(results, ground_truth, k)` 时
 - **则**系统使用标准 NDCG 公式：`DCG / IDCG`
-- **其中** `DCG = sum(relevance_i / log2(i + 1))`（relevance_i 为 1 if 在 ground truth 中 else 0）
+- **其中** `DCG = sum(relevance_i / log2(position + 1))`（relevance_i 为 1 if 在 ground truth 中 else 0，position 从 1 开始）
 - **并且**`IDCG` 假设理想排序下所有相关文档排在最前面
 - **并且**返回归一化的 NDCG 分数（0.0 到 1.0）
 - **当**评估脚手架计算 `hit_rate_at_k(results, ground_truth, k)` 时
@@ -61,6 +61,7 @@ The core engine SHALL provide an automated evaluation harness to quantify BM25 s
 #### Scenario: 质量门禁断言
 
 - **当**评估测试完成所有查询和指标计算后
-- **则**系统断言 `bm25_accuracy > 0.70`（BM25 Top-3 准确率必须达到 70%）
-- **如果**断言失败，测试 panic 并显示详细指标对比
+- **则**系统断言 `bm25_accuracy >= m1_accuracy - 0.05`（BM25 Top-3 准确率应在 M1 基线的 5% 容差内）
+- **并且**系统断言 `bm25_accuracy >= 0.70`（BM25 Top-3 准确率必须达到 70%）
+- **如果**任一断言失败，测试 panic 并显示详细指标对比
 - **并且**系统无论如何都会生成报告文件供人工审查
