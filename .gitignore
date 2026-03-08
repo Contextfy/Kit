@@ -15,6 +15,10 @@ target/
 .contextfy/
 contextfy.json
 
+# FastEmbed model cache
+.fastembed_cache/
+packages/core/.fastembed_cache/
+
 # Node
 node_modules/
 *.log
