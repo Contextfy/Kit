@@ -17,7 +17,9 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tantivy = { workspace = true }
 tantivy-jieba = { workspace = true }
-regex = "1"
+regex = { workspace = true }
+fastembed = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+serial_test = "3"

@@ -50,5 +50,11 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 # Testing
 tempfile = "3.8"
 
+# Embeddings
+fastembed = "5"
+
+# Text processing
+regex = "1"
+
 # Pin chrono to avoid arrow conflict
 chrono = "=0.4.30"
