@@ -261,14 +261,80 @@ fn is_language_keyword(word: &str) -> bool {
     // 常见的编程语言关键字（按字母序排序，支持二分查找）
     // 注意：已移除 map, new, range 等常用 API 名称，避免误杀
     const KEYWORDS: &[&str] = &[
-        "and", "as", "assert", "async", "await", "break", "case", "catch", "class", "const",
-        "continue", "debugger", "def", "default", "del", "defer", "do", "elif", "else", "enum",
-        "except", "export", "extends", "fallthrough", "false", "finally", "fn", "for", "from",
-        "func", "global", "goto", "if", "impl", "import", "in", "instanceof", "interface", "is",
-        "lambda", "let", "loop", "match", "mod", "move", "mut", "nonlocal", "not", "null", "of",
-        "or", "package", "pass", "pub", "raise", "ref", "return", "select", "static", "struct",
-        "super", "switch", "trait", "true", "try", "type", "typeof", "use", "var", "void", "where",
-        "while", "with", "yield",
+        "and",
+        "as",
+        "assert",
+        "async",
+        "await",
+        "break",
+        "case",
+        "catch",
+        "class",
+        "const",
+        "continue",
+        "debugger",
+        "def",
+        "default",
+        "del",
+        "defer",
+        "do",
+        "elif",
+        "else",
+        "enum",
+        "except",
+        "export",
+        "extends",
+        "fallthrough",
+        "false",
+        "finally",
+        "fn",
+        "for",
+        "from",
+        "func",
+        "global",
+        "goto",
+        "if",
+        "impl",
+        "import",
+        "in",
+        "instanceof",
+        "interface",
+        "is",
+        "lambda",
+        "let",
+        "loop",
+        "match",
+        "mod",
+        "move",
+        "mut",
+        "nonlocal",
+        "not",
+        "null",
+        "of",
+        "or",
+        "package",
+        "pass",
+        "pub",
+        "raise",
+        "ref",
+        "return",
+        "select",
+        "static",
+        "struct",
+        "super",
+        "switch",
+        "trait",
+        "true",
+        "try",
+        "type",
+        "typeof",
+        "use",
+        "var",
+        "void",
+        "where",
+        "while",
+        "with",
+        "yield",
     ];
 
     KEYWORDS.binary_search(&word).is_ok()
@@ -1215,9 +1281,18 @@ fn create_item() {
         // 应该提取 HashMap（CamelCase 类型名）
         assert!(keywords.contains(&"HashMap".to_string()));
         // 关键修复：map, new, range 不应该被过滤（它们是常用 API 名称）
-        assert!(keywords.contains(&"map".to_string()), "map 应该被提取，它是常用 API 名称");
-        assert!(keywords.contains(&"new".to_string()), "new 应该被提取，它是常用 API 名称");
-        assert!(keywords.contains(&"range".to_string()), "range 应该被提取，它是常用 API 名称");
+        assert!(
+            keywords.contains(&"map".to_string()),
+            "map 应该被提取，它是常用 API 名称"
+        );
+        assert!(
+            keywords.contains(&"new".to_string()),
+            "new 应该被提取，它是常用 API 名称"
+        );
+        assert!(
+            keywords.contains(&"range".to_string()),
+            "range 应该被提取，它是常用 API 名称"
+        );
     }
 }
 
