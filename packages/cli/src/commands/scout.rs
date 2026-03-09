@@ -26,7 +26,7 @@ use contextfy_core::{KnowledgeStore, Retriever};
 /// # }
 /// ```
 pub async fn scout(query: String) -> Result<()> {
-    let store = KnowledgeStore::new(".contextfy/data").await?;
+    let store = KnowledgeStore::new(".contextfy/data", None).await?;
     let retriever = Retriever::new(&store);
 
     match retriever.scout(&query).await {

@@ -45,6 +45,7 @@ fn create_document_from_content(
         content: content.to_string(),
         source_path: source_path.to_string(),
         keywords,
+        embedding: None,
     }
 }
 

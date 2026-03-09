@@ -3,12 +3,15 @@
 //! This module provides a wrapper around FastEmbed's TextEmbedding to generate
 //! 384-dimensional vectors from text using the BGE-small-en-v1.5 model.
 //!
+//! # Modules
+//!
+//! - [`math`] - Vector math operations (cosine similarity)
+//!
 //! # Thread Safety
 //!
 //! [`EmbeddingModel`] implements `Send + Sync` and can be safely wrapped in `Arc`
-//! for concurrent use across multiple threads. The `embed_text` method uses
-//! interior mutability via `UnsafeCell` to provide zero-cost concurrent access
-//! without runtime locking overhead.
+//! for concurrent use across multiple threads. The `embed_text` and `embed_batch`
+//! methods use interior mutability via `Mutex` for thread-safe concurrent access.
 //!
 //! # Performance
 //!
@@ -24,7 +27,7 @@
 //!
 //! # Example
 //!
-//! ```rust
+//! ```rust,no_run
 //! use contextfy_core::embeddings::EmbeddingModel;
 //!
 //! # fn main() -> anyhow::Result<()> {
@@ -38,9 +41,11 @@
 //! # }
 //! ```
 
+pub mod math;
+
 use anyhow::Context;
 use fastembed::{EmbeddingModel as FastEmbedModel, InitOptions, TextEmbedding};
-use std::cell::UnsafeCell;
+use std::sync::Mutex;
 
 /// Text embedding model wrapper.
 ///
@@ -51,17 +56,17 @@ use std::cell::UnsafeCell;
 /// # Thread Safety
 ///
 /// This type is `Send + Sync` and can be safely wrapped in `Arc` for concurrent access.
-/// The `embed_text()` method uses interior mutability via `UnsafeCell` to provide
-/// zero-cost concurrent access without runtime locking overhead. Simply wrap in `Arc`
-/// and share across threads - no `Mutex` needed.
+/// The `embed_text()` and `embed_batch()` methods use `Mutex` to ensure thread-safe
+/// access to the underlying ONNX model. Multiple threads can safely call these methods
+/// concurrently with automatic locking.
 ///
 /// # Performance
 ///
 /// - **Initialization**: Expensive (model download + ONNX loading), do once at startup
 /// - **Per-query**: < 100ms for single text (after first call)
-/// - **Concurrency**: Zero-cost thread-safe access via `UnsafeCell`
+/// - **Concurrency**: Thread-safe via Mutex with minimal contention (embedding is CPU-bound)
 pub struct EmbeddingModel {
-    inner: UnsafeCell<TextEmbedding>,
+    inner: Mutex<TextEmbedding>,
 }
 
 impl EmbeddingModel {
@@ -96,7 +101,7 @@ impl EmbeddingModel {
         .context("Failed to initialize FastEmbed TextEmbedding with BGE-small-en-v1.5")?;
 
         Ok(Self {
-            inner: UnsafeCell::new(inner),
+            inner: Mutex::new(inner),
         })
     }
 
@@ -123,6 +128,7 @@ impl EmbeddingModel {
     /// - Never panics on valid UTF-8 input
     /// - Returns descriptive errors via `anyhow::Context`
     /// - Validates output dimension (must be 384)
+    /// - Uses Mutex to ensure thread-safe access
     ///
     /// # Example
     ///
@@ -137,17 +143,11 @@ impl EmbeddingModel {
     /// # }
     /// ```
     pub fn embed_text(&self, text: &str) -> anyhow::Result<Vec<f32>> {
-        // SAFETY: This method uses `UnsafeCell` to provide interior mutability.
-        // The `&self` signature allows concurrent calls without requiring `&mut self`
-        // or runtime locks (Mutex). FastEmbed's TextEmbedding is thread-safe for
-        // concurrent inference operations - the `&mut self` requirement is an API
-        // artifact for internal caching, not actual data mutation.
-        //
-        // We guarantee safety by:
-        // 1. TextEmbedding is Send + Sync (verified by its type bounds)
-        // 2. Multiple concurrent calls to embed() don't mutate overlapping state
-        // 3. The returned Vec<f32> is owned by the caller, no shared references escape
-        let inner = unsafe { &mut *self.inner.get() };
+        // Use Mutex to ensure thread-safe access
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
 
         // FastEmbed's embed method accepts Vec<&str> and returns Vec<Vec<f32>>
         // We wrap the single text in an array and extract the first result safely
@@ -171,22 +171,101 @@ impl EmbeddingModel {
 
         Ok(embedding)
     }
+
+    /// 批量生成 384 维嵌入向量
+    ///
+    /// 一次性对多个文本生成向量，利用 FastEmbed 的原生批处理能力。
+    /// 相比多次调用 `embed_text`，批处理可以显著减少总耗时。
+    ///
+    /// # Arguments
+    ///
+    /// * `texts` - 待嵌入的文本切片引用
+    ///
+    /// # Returns
+    ///
+    /// `Vec<Vec<f32>>`，每个向量的长度为 384。返回的向量数量与输入文本数量一致。
+    ///
+    /// # Errors
+    ///
+    /// 返回错误如果：
+    /// - 任何文本编码失败
+    /// - ONNX 推理失败
+    /// - 任何返回的嵌入向量维度不是 384
+    ///
+    /// # Performance
+    ///
+    /// - 批处理 N 条文本的总耗时显著低于 N 次单独调用 `embed_text` 的总和
+    /// - 利用 FastEmbed 的批处理优化，减少模型推理开销
+    /// - API 接受借用切片，调用方无需分配内存
+    ///
+    /// # Safety Guarantees
+    ///
+    /// 本方法：
+    /// - 在有效的 UTF-8 输入上从不 panic
+    /// - 通过 `anyhow::Context` 返回描述性错误
+    /// - 验证所有输出维度（必须都是 384）
+    /// - 使用 Mutex 确保线程安全访问（与 `embed_text` 相同的安全保证）
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use contextfy_core::embeddings::EmbeddingModel;
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// # let model = EmbeddingModel::new()?;
+    /// let texts = vec!["Hello, world!", "Goodbye, world!"];
+    /// let vectors = model.embed_batch(&texts)?;
+    /// assert_eq!(vectors.len(), 2);
+    /// assert_eq!(vectors[0].len(), 384);
+    /// assert_eq!(vectors[1].len(), 384);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn embed_batch(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        // 记录输入文本数量，用于后续校验
+        let expected_len = texts.len();
+
+        // Use Mutex to ensure thread-safe access
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+
+        // 直接调用 FastEmbed 的批处理接口
+        let embeddings = inner
+            .embed(texts, None)
+            .context("Failed to generate embeddings for batch")?;
+
+        // 契约防线：校验返回的向量数量是否等于输入的文本数量
+        if embeddings.len() != expected_len {
+            anyhow::bail!(
+                "Embedding batch contract violation: expected {} vectors, got {}",
+                expected_len,
+                embeddings.len()
+            );
+        }
+
+        // 预分配容量以减少扩容开销
+        let mut result = Vec::with_capacity(embeddings.len());
+
+        // 转换为 Vec 并验证每个向量的维度
+        for (idx, embedding) in embeddings.into_iter().enumerate() {
+            if embedding.len() != 384 {
+                anyhow::bail!(
+                    "Expected 384-dimensional embedding for text {}, got {} dimensions",
+                    idx,
+                    embedding.len()
+                );
+            }
+            result.push(embedding);
+        }
+
+        Ok(result)
+    }
 }
 
-// SAFETY: `EmbeddingModel` is Send because TextEmbedding is Send.
-// UnsafeCell<T> is Send when T is Send.
-unsafe impl Send for EmbeddingModel {}
-
-// SAFETY: `EmbeddingModel` is Sync because:
-// 1. TextEmbedding is Send + Sync (verified by fastembed crate)
-// 2. We use UnsafeCell for interior mutability to enable concurrent access
-// 3. The embed() method doesn't actually mutate shared state - the &mut self
-//    requirement in FastEmbed v5 is an API artifact for internal caching
-// 4. Multiple threads can safely call embed_text() concurrently as they only
-//    read the model weights and write to separate output buffers
-//
-// This allows wrapping EmbeddingModel in Arc for zero-cost concurrent access.
-unsafe impl Sync for EmbeddingModel {}
+// Note: EmbeddingModel is Send + Sync because Mutex<T> is Send + Sync when T is Send.
+// No unsafe impl needed - Mutex provides the necessary guarantees.
 
 #[cfg(test)]
 mod tests {
@@ -316,5 +395,190 @@ mod tests {
 
         // Also verify dimension
         assert_eq!(vector.len(), 384, "Vector must be 384-dimensional");
+    }
+
+    #[test]
+    #[serial]
+    fn test_batch_embedding_basic() {
+        // Test basic batch embedding functionality
+        let model = EmbeddingModel::new().expect("Model should initialize");
+        let texts = vec!["Hello, world!", "Goodbye, world!"];
+
+        let vectors = model
+            .embed_batch(&texts)
+            .expect("Batch embedding should succeed");
+
+        assert_eq!(vectors.len(), 2, "Should return 2 vectors");
+        assert_eq!(
+            vectors[0].len(),
+            384,
+            "First vector must be 384-dimensional"
+        );
+        assert_eq!(
+            vectors[1].len(),
+            384,
+            "Second vector must be 384-dimensional"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_batch_embedding_empty() {
+        // Test that empty input returns empty result
+        let model = EmbeddingModel::new().expect("Model should initialize");
+        let texts: Vec<&str> = vec![];
+
+        let vectors = model
+            .embed_batch(&texts)
+            .expect("Empty batch embedding should succeed");
+
+        assert_eq!(vectors.len(), 0, "Empty input should return empty result");
+    }
+
+    #[test]
+    #[serial]
+    fn test_batch_embedding_single() {
+        // Test that single-item batch works the same as embed_text
+        let model = EmbeddingModel::new().expect("Model should initialize");
+        let text = "Test text for single-item batch";
+
+        // Using embed_batch with single item
+        let batch_vectors = model
+            .embed_batch(&[text])
+            .expect("Single-item batch should succeed");
+
+        // Using embed_text
+        let single_vector = model.embed_text(text).expect("embed_text should succeed");
+
+        assert_eq!(batch_vectors.len(), 1, "Should return 1 vector");
+        assert_eq!(
+            batch_vectors[0].len(),
+            384,
+            "Vector must be 384-dimensional"
+        );
+
+        // Verify they produce identical results
+        assert_eq!(
+            batch_vectors[0].len(),
+            single_vector.len(),
+            "Dimensions should match"
+        );
+        for (i, (v1, v2)) in batch_vectors[0]
+            .iter()
+            .zip(single_vector.iter())
+            .enumerate()
+        {
+            assert!(
+                (v1 - v2).abs() < 1e-6,
+                "Dimension {} differs between batch and single: {} vs {}",
+                i,
+                v1,
+                v2
+            );
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_batch_embedding_multiple() {
+        // Test batch processing with multiple texts
+        let model = EmbeddingModel::new().expect("Model should initialize");
+        let texts = vec![
+            "First text",
+            "Second text",
+            "Third text",
+            "Fourth text",
+            "Fifth text",
+        ];
+
+        let vectors = model
+            .embed_batch(&texts)
+            .expect("Multi-item batch should succeed");
+
+        assert_eq!(vectors.len(), 5, "Should return 5 vectors");
+        for (idx, vector) in vectors.iter().enumerate() {
+            assert_eq!(vector.len(), 384, "Vector {} must be 384-dimensional", idx);
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_batch_embedding_unicode() {
+        // Test batch processing with Unicode text
+        let model = EmbeddingModel::new().expect("Model should initialize");
+        let texts = vec!["你好世界 🚀", "Hello 世界", "Test 测试"];
+
+        let vectors = model
+            .embed_batch(&texts)
+            .expect("Unicode batch should succeed");
+
+        assert_eq!(vectors.len(), 3, "Should return 3 vectors");
+        for vector in &vectors {
+            assert_eq!(vector.len(), 384, "All vectors must be 384-dimensional");
+        }
+    }
+
+    #[test]
+    #[serial]
+    #[ignore]
+    fn bench_batch_vs_single() {
+        // Performance benchmark: batch should be faster than multiple singles
+        // Run with: cargo test --package contextfy-core bench_batch_vs_single -- --ignored
+        let model = EmbeddingModel::new().expect("Model should initialize");
+
+        let texts: Vec<&str> = vec![
+            "Document 1: This is a test document with some content.",
+            "Document 2: Another document with different content.",
+            "Document 3: Third document for batch processing.",
+            "Document 4: Fourth document to test performance.",
+            "Document 5: Fifth document completes the set.",
+        ];
+
+        // Warm-up
+        let _ = model.embed_batch(&texts);
+
+        // Measure batch processing
+        let start_batch = std::time::Instant::now();
+        let batch_vectors = model.embed_batch(&texts).unwrap();
+        let duration_batch = start_batch.elapsed();
+
+        // Measure individual processing
+        let start_single = std::time::Instant::now();
+        let mut single_vectors = Vec::new();
+        for text in &texts {
+            single_vectors.push(model.embed_text(text).unwrap());
+        }
+        let duration_single = start_single.elapsed();
+
+        println!("Batch processing took: {:?}", duration_batch);
+        println!("Individual processing took: {:?}", duration_single);
+        println!(
+            "Speedup: {:.2}x",
+            duration_single.as_millis() as f64 / duration_batch.as_millis() as f64
+        );
+
+        // Verify results match
+        assert_eq!(batch_vectors.len(), single_vectors.len());
+        for (i, (batch_vec, single_vec)) in
+            batch_vectors.iter().zip(single_vectors.iter()).enumerate()
+        {
+            assert_eq!(batch_vec.len(), single_vec.len());
+            for (j, (v1, v2)) in batch_vec.iter().zip(single_vec.iter()).enumerate() {
+                assert!(
+                    (v1 - v2).abs() < 1e-6,
+                    "Vector {} dimension {} differs: {} vs {}",
+                    i,
+                    j,
+                    v1,
+                    v2
+                );
+            }
+        }
+
+        // Batch should be faster or at least not significantly slower
+        assert!(
+            duration_batch <= duration_single,
+            "Batch processing should be faster or equal to individual processing"
+        );
     }
 }
