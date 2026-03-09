@@ -259,7 +259,7 @@ fn get_snakecase_regex() -> &'static Regex {
 /// 检查是否是编程语言关键字（O(log N) 二分查找）
 fn is_language_keyword(word: &str) -> bool {
     // 常见的编程语言关键字（按字母序排序，支持二分查找）
-    // 注意：已移除 map, new, range 等常用 API 名称，避免误杀
+    // 包含常用编程语言关键字和常见英文单词
     const KEYWORDS: &[&str] = &[
         "and",
         "as",
@@ -303,10 +303,12 @@ fn is_language_keyword(word: &str) -> bool {
         "lambda",
         "let",
         "loop",
+        "map",
         "match",
         "mod",
         "move",
         "mut",
+        "new",
         "nonlocal",
         "not",
         "null",
@@ -316,6 +318,7 @@ fn is_language_keyword(word: &str) -> bool {
         "pass",
         "pub",
         "raise",
+        "range",
         "ref",
         "return",
         "select",
@@ -1280,18 +1283,19 @@ fn create_item() {
         assert!(keywords.contains(&"process_data".to_string()));
         // 应该提取 HashMap（CamelCase 类型名）
         assert!(keywords.contains(&"HashMap".to_string()));
-        // 关键修复：map, new, range 不应该被过滤（它们是常用 API 名称）
+        // 关键修复：map, new, range 应该被过滤（它们是常见编程语言关键字）
+        // 这避免了搜索噪音污染，确保只有有意义的标识符被提取
         assert!(
-            keywords.contains(&"map".to_string()),
-            "map 应该被提取，它是常用 API 名称"
+            !keywords.contains(&"map".to_string()),
+            "map 应该被过滤，它是常见关键字"
         );
         assert!(
-            keywords.contains(&"new".to_string()),
-            "new 应该被提取，它是常用 API 名称"
+            !keywords.contains(&"new".to_string()),
+            "new 应该被过滤，它是常见关键字"
         );
         assert!(
-            keywords.contains(&"range".to_string()),
-            "range 应该被提取，它是常用 API 名称"
+            !keywords.contains(&"range".to_string()),
+            "range 应该被过滤，它是常见关键字"
         );
     }
 }

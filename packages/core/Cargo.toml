@@ -22,4 +22,5 @@ fastembed = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+chrono = "0.4"
 serial_test = "3"
