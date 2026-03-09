@@ -95,13 +95,13 @@
 ✅ **所有任务已完成**
 
 **测试结果**:
-- BM25 Top-3 准确率: 90.0%（质量门禁 70% ✅）
-- BM25 NDCG@3: 0.693（比 M1 提升 6.3% ✅）
-- 测试覆盖: 10 个查询 × 18 篇模拟文档
-- 代码行数: 1278 行（evaluation_test.rs）
+- BM25 Top-3 准确率: 100.0%（与 M1 持平 ✅）
+- BM25 NDCG@3: 0.709（比 M1 提升 7.5% ✅）
+- 测试覆盖: 13 个查询 × 22 篇模拟文档
+- 代码行数: 约 1700 行（evaluation_test.rs）
 
 **质量保证**:
 - ✅ `cargo fmt` 通过
-- ✅ `cargo clippy` 通过（修复了单字符字符串字面量警告）
+- ✅ `cargo clippy` 通过
 - ✅ `cargo test --test evaluation_test` 通过
 - ✅ 报告生成在 `docs/BM25_EVALUATION_REPORT.md`
