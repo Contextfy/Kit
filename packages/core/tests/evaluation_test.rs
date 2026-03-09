@@ -1643,7 +1643,7 @@ fn test_bm25_evaluation() {
     println!("║                          质量门禁检查                                 ║");
     println!("╚══════════════════════════════════════════════════════════════════════╝\n");
 
-    if bm25_accuracy > 0.70 {
+    if bm25_accuracy >= 0.70 {
         println!(
             "✅ 质量门禁通过: BM25 Top-3 准确率 ({:.1}%) ≥ 70%\n",
             bm25_accuracy * 100.0
