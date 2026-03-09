@@ -486,6 +486,7 @@ mod tests {
             content: "This is the full content of the test document".to_string(),
             source_path: "/test/path.md".to_string(),
             keywords: vec![],
+            embedding: None,
         };
 
         // 添加文档
@@ -512,6 +513,7 @@ mod tests {
             content: "Rust is a systems programming language".to_string(),
             source_path: "/rust.md".to_string(),
             keywords: vec![],
+            embedding: None,
         };
 
         let record2 = KnowledgeRecord {
@@ -522,6 +524,7 @@ mod tests {
             content: "Python is easy to learn".to_string(),
             source_path: "/python.md".to_string(),
             keywords: vec![],
+            embedding: None,
         };
 
         indexer.add_doc(&record1).unwrap();
@@ -555,6 +558,7 @@ mod tests {
             content: "Learn Rust systems programming".to_string(),
             source_path: "/rust.md".to_string(),
             keywords: vec![],
+            embedding: None,
         };
 
         let record2 = KnowledgeRecord {
@@ -565,6 +569,7 @@ mod tests {
             content: "Python programming language tutorial".to_string(),
             source_path: "/python.md".to_string(),
             keywords: vec![],
+            embedding: None,
         };
 
         indexer.add_doc(&record1).unwrap();
@@ -602,6 +607,7 @@ mod tests {
                 content: "keyword content".repeat(i + 1).to_string(),
                 source_path: format!("/doc{}.md", i),
                 keywords: vec![],
+                embedding: None,
             };
             indexer.add_doc(&record).unwrap();
         }
@@ -659,6 +665,7 @@ mod tests {
                 ),
                 source_path: format!("/docs/doc{:04}.md", i),
                 keywords: vec![],
+                embedding: None,
             };
             indexer.add_doc(&record).unwrap();
         }

@@ -1,8 +1,9 @@
 use anyhow::Result;
-use contextfy_core::{parse_markdown, KnowledgeStore};
+use contextfy_core::{parse_markdown, EmbeddingModel, KnowledgeStore};
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 /// 默认文档目录路径
 const DEFAULT_DOCS_PATH: &str = "docs/examples";
@@ -43,7 +44,32 @@ fn default_docs_path() -> String {
 /// # }
 /// ```
 pub async fn build() -> Result<()> {
-    let store = KnowledgeStore::new(".contextfy/data").await?;
+    // 初始化 EmbeddingModel（如果失败则优雅降级为 None，文档仍可通过 BM25 检索）
+    // 使用 spawn_blocking 避免阻塞异步 worker 线程
+    let embedding_model = match tokio::task::spawn_blocking(EmbeddingModel::new).await {
+        Ok(Ok(model)) => {
+            println!("✓ Embedding model initialized successfully");
+            Some(Arc::new(model))
+        }
+        Ok(Err(e)) => {
+            eprintln!(
+                "Warning: Failed to initialize embedding model: {}. \
+                Vector embeddings will be disabled (graceful degradation - documents still searchable via BM25).",
+                e
+            );
+            None
+        }
+        Err(e) => {
+            eprintln!(
+                "Warning: Embedding model initialization task panicked: {}. \
+                Vector embeddings will be disabled (graceful degradation - documents still searchable via BM25).",
+                e
+            );
+            None
+        }
+    };
+
+    let store = KnowledgeStore::new(".contextfy/data", embedding_model).await?;
 
     // 读取配置文件
     let config_path = Path::new("contextfy.json");

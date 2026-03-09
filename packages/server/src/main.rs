@@ -38,7 +38,7 @@ type AppState = Arc<RwLock<KnowledgeStore>>;
 #[tokio::main]
 async fn main() {
     let store = Arc::new(RwLock::new(
-        KnowledgeStore::new(".contextfy/data").await.unwrap(),
+        KnowledgeStore::new(".contextfy/data", None).await.unwrap(),
     ));
 
     let app = Router::new()

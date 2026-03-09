@@ -1,4 +1,5 @@
-use crate::parser::{extract_code_block_keywords, extract_summary, ParsedDoc};
+use crate::embeddings::EmbeddingModel;
+use crate::parser::{extract_code_block_keywords, ParsedDoc};
 use crate::search::{create_index, Indexer, Searcher};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,7 @@ use uuid::Uuid;
 /// * `content` - 完整内容
 /// * `source_path` - 原始文件路径，用于追溯源文件
 /// * `keywords` - 关键词列表（用于全文搜索，为 Issue #10 打桩）
+/// * `embedding` - 向量嵌入（384 维浮点数组，用于语义搜索）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeRecord {
     pub id: String,
@@ -30,6 +32,8 @@ pub struct KnowledgeRecord {
     pub source_path: String, // 新增字段：记录原始文件路径，向后兼容旧版 JSON
     #[serde(default)]
     pub keywords: Vec<String>, // 关键词列表（为 Issue #10 打桩）
+    #[serde(default)]
+    pub embedding: Option<Vec<f32>>, // 向量嵌入（用于语义搜索，向后兼容旧版 JSON）
 }
 
 pub struct KnowledgeStore {
@@ -40,10 +44,13 @@ pub struct KnowledgeStore {
     /// Tantivy 搜索器（可选，用于全文搜索）
     /// 使用 Arc 以支持在异步上下文和阻塞任务中安全访问
     searcher: Option<Arc<Searcher>>,
+    /// 嵌入模型（可选，用于向量化）
+    /// 使用 Arc 以支持在异步上下文和阻塞任务中安全访问
+    embedding_model: Option<Arc<EmbeddingModel>>,
 }
 
 impl KnowledgeStore {
-    pub async fn new(data_dir: &str) -> Result<Self> {
+    pub async fn new(data_dir: &str, embedding_model: Option<Arc<EmbeddingModel>>) -> Result<Self> {
         fs::create_dir_all(data_dir).await?;
 
         // 启动恢复：清理上次崩溃遗留的临时目录
@@ -76,6 +83,7 @@ impl KnowledgeStore {
             data_dir: data_dir.to_string(),
             indexer,
             searcher,
+            embedding_model,
         })
     }
 
@@ -340,6 +348,32 @@ impl KnowledgeStore {
             // 从内容中提取代码块关键词
             let keywords = extract_code_block_keywords(&doc.content);
 
+            // 生成向量嵌入（如果有嵌入模型）
+            // 使用 spawn_blocking 避免阻塞异步 worker 线程
+            let embedding = if let Some(model) = &self.embedding_model {
+                let model_clone = Arc::clone(model);
+                let text = format!("{} {}", doc.title, doc.summary);
+                match tokio::task::spawn_blocking(move || model_clone.embed_text(&text)).await {
+                    Ok(Ok(vec)) => Some(vec),
+                    Ok(Err(e)) => {
+                        eprintln!(
+                            "Warning: Failed to generate embedding for document '{}': {}. Vector field will be None.",
+                            doc.title, e
+                        );
+                        None
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Failed to join embedding task for document '{}': {}. Vector field will be None.",
+                            doc.title, e
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
             let record = KnowledgeRecord {
                 id: id.clone(),
                 title: doc.title.clone(),
@@ -348,6 +382,7 @@ impl KnowledgeStore {
                 content: doc.content.clone(),
                 source_path: doc.path.clone(),
                 keywords,
+                embedding,
             };
 
             // 创建临时目录
@@ -405,24 +440,86 @@ impl KnowledgeStore {
             };
 
             // 步骤 2：在临时目录中写入所有切片
+            // 【关键优化】使用批处理生成向量，避免循环调用 embed_text
+            // 先收集所有切片的文本，然后一次性生成所有向量
+            let embedding_texts: Vec<String> = doc
+                .sections
+                .iter()
+                .map(|slice| format!("{} {}", slice.section_title, slice.summary))
+                .collect();
+
+            // 批量生成向量（如果有嵌入模型）
+            // 使用 spawn_blocking 避免阻塞异步 worker 线程
+            let embeddings = if let Some(model) = &self.embedding_model {
+                let model_clone = Arc::clone(model);
+                let doc_title = doc.title.clone();
+                match tokio::task::spawn_blocking(move || {
+                    // 在闭包内部将 Vec<String> 转换为 Vec<&str>
+                    let texts_refs: Vec<&str> =
+                        embedding_texts.iter().map(|s| s.as_str()).collect();
+                    model_clone.embed_batch(&texts_refs)
+                })
+                .await
+                {
+                    Ok(Ok(vecs)) => Some(vecs),
+                    Ok(Err(e)) => {
+                        eprintln!(
+                            "Warning: Failed to generate batch embeddings for document '{}': {}. Vector fields will be None.",
+                            doc_title, e
+                        );
+                        None
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Failed to join batch embedding task for document '{}': {}. Vector fields will be None.",
+                            doc_title, e
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            // 步骤 2.5：验证向量数量与切片数量是否匹配（在循环前一次性检查）
+            // 如果不匹配，打印警告并将 embeddings 设为 None（优雅降级）
+            let embeddings = if embeddings
+                .as_ref()
+                .is_some_and(|vecs| vecs.len() != doc.sections.len())
+            {
+                eprintln!(
+                    "Warning: Embedding count mismatch for document '{}'. Expected {}, got {}. All slices will have None embeddings (graceful degradation - documents still searchable via BM25).",
+                    doc.title,
+                    doc.sections.len(),
+                    embeddings.as_ref().map_or(0, |vecs| vecs.len())
+                );
+                None // 清空 embeddings，后续所有切片都会得到 None
+            } else {
+                embeddings
+            };
+
             let mut temp_files = Vec::new();
 
-            for slice in &doc.sections {
+            for (idx, slice) in doc.sections.iter().enumerate() {
                 let id = Uuid::new_v4().to_string();
                 let temp_path = temp_dir.join(format!("{}.json", id));
 
                 // 从切片内容中提取代码块关键词
                 let keywords = extract_code_block_keywords(&slice.content);
 
+                // 获取当前切片的向量（如果有）- 已在循环前验证长度，这里安全使用 get()
+                let embedding = embeddings.as_ref().and_then(|vecs| vecs.get(idx).cloned());
+
                 // 序列化并写入临时文件
                 let record = KnowledgeRecord {
                     id: id.clone(),
                     title: slice.section_title.clone(),
                     parent_doc_title: slice.parent_doc_title.clone(),
-                    summary: extract_summary(&slice.content),
+                    summary: slice.summary.clone(),
                     content: slice.content.clone(),
                     source_path: doc.path.clone(),
                     keywords,
+                    embedding,
                 };
 
                 // 序列化失败时清理临时目录
@@ -562,7 +659,7 @@ mod tests {
     async fn test_add_sliced_doc() {
         // 创建临时测试目录
         let temp_dir = tempfile::tempdir().unwrap();
-        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap())
+        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap(), None)
             .await
             .unwrap();
 
@@ -615,7 +712,7 @@ mod tests {
     async fn test_add_empty_sections() {
         // 创建临时测试目录
         let temp_dir = tempfile::tempdir().unwrap();
-        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap())
+        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap(), None)
             .await
             .unwrap();
 
@@ -653,7 +750,7 @@ mod tests {
     #[tokio::test]
     async fn test_storage_robustness() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap())
+        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap(), None)
             .await
             .unwrap();
 
@@ -722,7 +819,7 @@ mod tests {
     #[tokio::test]
     async fn test_rollback_temp_cleanup() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap())
+        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap(), None)
             .await
             .unwrap();
 
@@ -792,7 +889,7 @@ mod tests {
     #[tokio::test]
     async fn test_atomicity_all_or_nothing() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap())
+        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap(), None)
             .await
             .unwrap();
 
