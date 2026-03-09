@@ -24,3 +24,4 @@ fastembed = { workspace = true }
 tempfile = { workspace = true }
 chrono = "0.4"
 serial_test = "3"
+rand = "0.8"
