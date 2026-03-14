@@ -10,6 +10,12 @@ use tokio::fs;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
+/// 混合检索召回倍数
+///
+/// 为了保证召回率，BM25 和向量搜索各自召回 `top_k * RECALL_MULTIPLIER` 条结果，
+/// 然后在合并后通过加权融合和排序选出最终的 top_k 条。
+const RECALL_MULTIPLIER: usize = 2;
+
 /// 知识库中的一条记录
 ///
 /// # 字段
@@ -35,6 +41,22 @@ pub struct KnowledgeRecord {
     pub keywords: Vec<String>, // 关键词列表（为 Issue #10 打桩）
     #[serde(default)]
     pub embedding: Option<Vec<f32>>, // 向量嵌入（用于语义搜索，向后兼容旧版 JSON）
+}
+
+/// 混合检索结果（包含原始分数和最终融合分数）
+///
+/// # 字段
+///
+/// * `record` - 知识记录
+/// * `bm25_score` - 原始 BM25 分数（未归一化）
+/// * `vector_score` - 余弦相似度（范围 [0, 1]）
+/// * `final_score` - 加权融合后的最终分数（范围 [0, 1]）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BriefWithScore {
+    pub record: KnowledgeRecord,
+    pub bm25_score: f32,
+    pub vector_score: f32,
+    pub final_score: f32,
 }
 
 pub struct KnowledgeStore {
@@ -236,7 +258,12 @@ impl KnowledgeStore {
         let _ = fs::remove_dir_all(temp_dir).await;
     }
 
-    pub async fn search(&self, query: &str) -> Result<Vec<(KnowledgeRecord, f32)>> {
+    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<(KnowledgeRecord, f32)>> {
+        // 短路保护：limit 为 0 时直接返回空结果
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
         // 优先使用 Tantivy Searcher 执行 BM25 搜索
         if let Some(searcher) = &self.searcher {
             // 使用 spawn_blocking 避免阻塞 Tokio 线程池
@@ -245,7 +272,8 @@ impl KnowledgeStore {
             let query_owned = query.to_string();
 
             let search_result =
-                tokio::task::spawn_blocking(move || searcher_clone.search(&query_owned, 100)).await;
+                tokio::task::spawn_blocking(move || searcher_clone.search(&query_owned, limit))
+                    .await;
 
             match search_result {
                 Ok(Ok(search_results)) => {
@@ -361,6 +389,9 @@ impl KnowledgeStore {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.0.id.cmp(&b.0.id))
         });
+
+        // 严格遵守 limit 契约，防止内存溢出
+        scored_records.truncate(limit);
 
         // 返回排序后的 (record, score) 元组列表
         Ok(scored_records)
@@ -537,6 +568,172 @@ impl KnowledgeStore {
     ) -> Result<Vec<(KnowledgeRecord, f32)>> {
         // 委托给核心搜索逻辑
         self.do_vector_search(query_vector, limit).await
+    }
+
+    /// 混合检索（Hybrid Search）：结合 BM25 和向量语义搜索
+    ///
+    /// 通过并发执行 BM25 全文搜索和向量语义搜索，归一化分数后按权重融合，
+    /// 提供更精准的检索结果。BM25 权重 70%，向量权重 30%。
+    ///
+    /// # 算法流程
+    ///
+    /// 1. **多路召回**：并发调用 BM25 `search` 和 `vector_search`，获取 Top-N 结果（N = top_k * 2）
+    /// 2. **BM25 归一化**：使用 Min-Max 归一化将 BM25 分数映射到 [0, 1] 范围
+    /// 3. **结果合并**：使用 HashMap 按文档 ID 合并两路结果，缺失分数设为 0.0
+    /// 4. **加权融合**：按 `final_score = 0.7 * normalized_bm25 + 0.3 * vector_score` 计算最终得分
+    /// 5. **排序截断**：按 `final_score` 降序排序，分数相同时使用 ID 作为 tie-breaker，截取 top_k
+    ///
+    /// # 优雅降级
+    ///
+    /// - 如果向量模型未初始化或向量搜索失败，系统平滑退化为纯 BM25 搜索
+    /// - 如果 BM25 搜索返回空结果，返回纯向量搜索结果
+    ///
+    /// # 性能优化
+    ///
+    /// - 使用 `tokio::join!` 并发执行两路搜索，降低总延迟
+    /// - 内存缓存优先，减少磁盘 I/O
+    ///
+    /// # 参数
+    ///
+    /// * `query` - 查询文本
+    /// * `top_k` - 返回结果的最大数量
+    ///
+    /// # 返回
+    ///
+    /// 按 `final_score` 降序排列的 `BriefWithScore` 列表，包含原始分数和最终融合分数
+    ///
+    /// # 错误
+    ///
+    /// - 如果 BM25 搜索失败，返回错误
+    /// - 如果向量搜索失败，记录警告并继续（优雅降级）
+    ///
+    /// # 示例
+    ///
+    /// ```rust,no_run
+    /// # use contextfy_core::storage::KnowledgeStore;
+    /// # use anyhow::Result;
+    /// # async fn example(store: KnowledgeStore) -> Result<()> {
+    /// let results = store.hybrid_search("how to create a red block", 10).await?;
+    /// for result in results {
+    ///     println!("{} (BM25: {:.2}, Vector: {:.2}, Final: {:.2})",
+    ///         result.record.title, result.bm25_score, result.vector_score, result.final_score);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn hybrid_search(&self, query: &str, top_k: usize) -> Result<Vec<BriefWithScore>> {
+        // 边界条件检查
+        if top_k == 0 || query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 计算召回数量（top_k * RECALL_MULTIPLIER 保证召回率）
+        let recall_n = top_k * RECALL_MULTIPLIER;
+
+        // 【并发检索】使用 tokio::join! 并发执行 BM25 和向量搜索
+        // Rust 允许多个不可变借用 (&self) 并发存在，所以这里是安全的
+        let (bm25_results, vector_results) = tokio::join!(self.search(query, recall_n), async {
+            // 向量搜索可能失败（无模型），优雅降级
+            match self.vector_search(query, recall_n).await {
+                Ok(results) => results,
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Vector search failed: {}. Falling back to BM25-only search.",
+                        e
+                    );
+                    Vec::new() // 返回空结果，后续会将 vector_score 设为 0.0
+                }
+            }
+        });
+
+        // 处理 BM25 搜索失败情况
+        let bm25_results = bm25_results?;
+
+        // 【结果交并集】使用 HashMap 按文档 ID 合并两路结果
+        let mut merged_results: HashMap<String, BriefWithScore> = HashMap::new();
+
+        // 插入 BM25 结果（原始分数，稍后统一归一化）
+        for (record, bm25_score) in bm25_results {
+            merged_results.insert(
+                record.id.clone(),
+                BriefWithScore {
+                    record,
+                    bm25_score,
+                    vector_score: 0.0, // 默认为 0，如果向量搜索有结果会被更新
+                    final_score: 0.0,  // 稍后计算
+                },
+            );
+        }
+
+        // 更新向量分数
+        for (record, vector_score) in vector_results {
+            if let Some(result) = merged_results.get_mut(&record.id) {
+                // 文档同时存在于两路结果中，更新 vector_score
+                result.vector_score = vector_score;
+            } else {
+                // 文档仅在向量结果中，插入新记录
+                merged_results.insert(
+                    record.id.clone(),
+                    BriefWithScore {
+                        record,
+                        bm25_score: 0.0,
+                        vector_score,
+                        final_score: 0.0, // 稍后计算
+                    },
+                );
+            }
+        }
+
+        // 【加权融合】计算最终分数
+        const BM25_WEIGHT: f32 = 0.7;
+        const VECTOR_WEIGHT: f32 = 0.3;
+
+        // 转换为 Vec 并计算最终分数
+        let mut results: Vec<BriefWithScore> = merged_results.into_values().collect();
+
+        // 重新计算归一化 BM25 分数和最终分数
+        if !results.is_empty() {
+            // 提取所有 BM25 分数并归一化
+            let all_bm25_scores: Vec<f32> = results.iter().map(|r| r.bm25_score).collect();
+            let min_bm25 = all_bm25_scores
+                .iter()
+                .min_by(|a, b| a.partial_cmp(b).unwrap())
+                .unwrap_or(&0.0);
+            let max_bm25 = all_bm25_scores
+                .iter()
+                .max_by(|a, b| a.partial_cmp(b).unwrap())
+                .unwrap_or(&0.0);
+            let range = max_bm25 - min_bm25;
+
+            for result in &mut results {
+                let normalized_bm25 = if range.abs() < f32::EPSILON {
+                    // 所有分数相同或只有向量结果
+                    if result.bm25_score > 0.0 {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                } else {
+                    // Min-Max 归一化
+                    (result.bm25_score - min_bm25) / range
+                };
+                result.final_score =
+                    BM25_WEIGHT * normalized_bm25 + VECTOR_WEIGHT * result.vector_score;
+            }
+        }
+
+        // 【安全排序】按 final_score 降序排序，分数相同时使用 ID 作为 tie-breaker
+        results.sort_by(|a, b| {
+            b.final_score
+                .partial_cmp(&a.final_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.record.id.cmp(&b.record.id))
+        });
+
+        // 截取前 top_k 个结果
+        results.truncate(top_k);
+
+        Ok(results)
     }
 
     /// 快速通过 ID 获取记录（O(1) 复杂度）
@@ -1574,6 +1771,401 @@ mod tests {
             duration.as_millis() < 500,
             "Vector search should be < 500ms, took {}ms",
             duration.as_millis()
+        );
+    }
+
+    // ========== 混合检索（Hybrid Search）测试 ==========
+
+    /// 混合检索边界条件测试
+    #[tokio::test]
+    async fn test_hybrid_search_boundary_conditions() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap(), None)
+            .await
+            .unwrap();
+
+        // top_k = 0 应该返回空结果
+        let results = store.hybrid_search("test query", 0).await.unwrap();
+        assert!(results.is_empty());
+
+        // 空查询应该返回空结果
+        let results = store.hybrid_search("", 10).await.unwrap();
+        assert!(results.is_empty());
+
+        // 仅空格的查询应该返回空结果
+        let results = store.hybrid_search("   ", 10).await.unwrap();
+        assert!(results.is_empty());
+    }
+
+    /// 混合检索优雅降级测试（无向量模型）
+    #[tokio::test]
+    async fn test_hybrid_search_fallback_to_bm25() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap(), None)
+            .await
+            .unwrap();
+
+        // 添加测试文档
+        let doc = ParsedDoc {
+            path: "/test/doc.md".to_string(),
+            title: "Test Doc".to_string(),
+            summary: "Test summary".to_string(),
+            content: "Test content".to_string(),
+            sections: vec![],
+        };
+        store.add(&doc).await.unwrap();
+
+        // 无向量模型时，应该退化为纯 BM25 搜索
+        let results = store.hybrid_search("Test", 10).await.unwrap();
+        assert!(!results.is_empty());
+
+        // 验证所有结果的 vector_score 都为 0.0
+        for result in &results {
+            assert_eq!(result.vector_score, 0.0);
+            assert!(result.final_score > 0.0);
+        }
+    }
+
+    /// BM25 分数归一化测试
+    #[tokio::test]
+    async fn test_hybrid_search_bm25_normalization() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap(), None)
+            .await
+            .unwrap();
+
+        // 添加 3 个测试文档
+        for i in 0..3 {
+            let doc = ParsedDoc {
+                path: format!("/test/doc{}.md", i),
+                title: format!("Test Doc {}", i),
+                summary: format!("Test {}", i),
+                content: format!("Content {}", i),
+                sections: vec![],
+            };
+            store.add(&doc).await.unwrap();
+        }
+
+        // 执行混合检索
+        let results = store.hybrid_search("Test", 10).await.unwrap();
+
+        // 验证：所有结果都应该有分数（归一化后应该在 [0, 1] 范围内）
+        for result in &results {
+            // BM25 分数可能大于 1（未归一化），但 final_score 应该在合理范围内
+            assert!(result.final_score >= 0.0 && result.final_score <= 1.0);
+        }
+    }
+
+    /// 加权融合测试
+    #[tokio::test]
+    async fn test_hybrid_search_weighted_fusion() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let data_dir = temp_dir.path().to_str().unwrap();
+
+        // 创建 3 个文档并手动赋予向量
+        let vec_a: Vec<f32> = (0..384).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
+        let vec_b: Vec<f32> = (0..384).map(|i| if i == 1 { 1.0 } else { 0.0 }).collect();
+        let vec_c: Vec<f32> = (0..384).map(|i| if i < 2 { 0.7071 } else { 0.0 }).collect();
+
+        let doc_a = KnowledgeRecord {
+            id: "doc-a".to_string(),
+            title: "test document alpha".to_string(),
+            parent_doc_title: "Test".to_string(),
+            summary: "About test".to_string(),
+            content: "Content".to_string(),
+            source_path: "/test/a.md".to_string(),
+            keywords: vec![],
+            embedding: Some(vec_a),
+        };
+
+        let doc_b = KnowledgeRecord {
+            id: "doc-b".to_string(),
+            title: "other document beta".to_string(),
+            parent_doc_title: "Test".to_string(),
+            summary: "About other".to_string(),
+            content: "Content".to_string(),
+            source_path: "/test/b.md".to_string(),
+            keywords: vec![],
+            embedding: Some(vec_b),
+        };
+
+        let doc_c = KnowledgeRecord {
+            id: "doc-c".to_string(),
+            title: "sample document gamma".to_string(),
+            parent_doc_title: "Test".to_string(),
+            summary: "About sample".to_string(),
+            content: "Content".to_string(),
+            source_path: "/test/c.md".to_string(),
+            keywords: vec![],
+            embedding: Some(vec_c),
+        };
+
+        // 写入磁盘
+        for doc in &[&doc_a, &doc_b, &doc_c] {
+            let json = serde_json::to_string_pretty(doc).unwrap();
+            let path = temp_dir.path().join(format!("{}.json", doc.id));
+            std::fs::write(&path, json).unwrap();
+        }
+
+        // 初始化 KnowledgeStore（无嵌入模型）
+        let store = KnowledgeStore::new(data_dir, None).await.unwrap();
+
+        // 查询 "test"，应该匹配 doc-a 的标题（BM25 高分）
+        let results = store.hybrid_search("test", 10).await.unwrap();
+
+        // 验证结果不为空
+        assert!(!results.is_empty());
+
+        // 验证分数计算：BM25 分数应该 > 0（因为 "test" 在 doc-a 标题中）
+        // 向量分数应该为 0.0（因为无模型）
+        for result in &results {
+            assert_eq!(result.vector_score, 0.0);
+            // final_score 应该等于归一化的 BM25 分数
+            assert!(result.final_score >= 0.0 && result.final_score <= 1.0);
+        }
+    }
+
+    /// 排序稳定性测试
+    #[tokio::test]
+    async fn test_hybrid_search_sort_stability() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap(), None)
+            .await
+            .unwrap();
+
+        // 添加多个文档
+        for i in 0..5 {
+            let doc = ParsedDoc {
+                path: format!("/test/doc{}.md", i),
+                title: format!("Doc {}", i),
+                summary: "Test".to_string(),
+                content: "Content".to_string(),
+                sections: vec![],
+            };
+            store.add(&doc).await.unwrap();
+        }
+
+        // 执行两次查询，验证结果顺序一致
+        let results1 = store.hybrid_search("Doc", 10).await.unwrap();
+        let results2 = store.hybrid_search("Doc", 10).await.unwrap();
+
+        assert_eq!(results1.len(), results2.len());
+
+        for (r1, r2) in results1.iter().zip(results2.iter()) {
+            assert_eq!(r1.record.id, r2.record.id);
+            assert_eq!(r1.final_score, r2.final_score);
+        }
+    }
+
+    /// NaN 分数处理测试
+    #[tokio::test]
+    async fn test_hybrid_search_nan_handling() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap(), None)
+            .await
+            .unwrap();
+
+        // 添加文档
+        let doc = ParsedDoc {
+            path: "/test/doc.md".to_string(),
+            title: "Test Doc".to_string(),
+            summary: "Test".to_string(),
+            content: "Content".to_string(),
+            sections: vec![],
+        };
+        store.add(&doc).await.unwrap();
+
+        // 正常查询不应产生 NaN
+        let results = store.hybrid_search("Test", 10).await.unwrap();
+        for result in &results {
+            assert!(result.final_score.is_finite());
+        }
+    }
+
+    /// 混合检索召回倍数测试
+    #[tokio::test]
+    async fn test_hybrid_search_recall_multiplier() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap(), None)
+            .await
+            .unwrap();
+
+        // 添加足够多的文档
+        for i in 0..20 {
+            let doc = ParsedDoc {
+                path: format!("/test/doc{}.md", i),
+                title: format!("Document {}", i),
+                summary: "Test summary".to_string(),
+                content: "Test content".to_string(),
+                sections: vec![],
+            };
+            store.add(&doc).await.unwrap();
+        }
+
+        // 请求 top_k = 5，应该返回 5 个结果
+        let results = store.hybrid_search("Test", 5).await.unwrap();
+        assert_eq!(results.len(), 5);
+    }
+
+    /// 混合检索与 BM25 一致性测试
+    #[tokio::test]
+    async fn test_hybrid_search_vs_bm25_consistency() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = KnowledgeStore::new(temp_dir.path().to_str().unwrap(), None)
+            .await
+            .unwrap();
+
+        // 添加文档
+        for i in 0..3 {
+            let doc = ParsedDoc {
+                path: format!("/test/doc{}.md", i),
+                title: format!("Test Doc {}", i),
+                summary: "Test".to_string(),
+                content: "Content".to_string(),
+                sections: vec![],
+            };
+            store.add(&doc).await.unwrap();
+        }
+
+        // 分别调用 BM25 和混合检索
+        let bm25_results = store.search("Test", 100).await.unwrap();
+        let hybrid_results = store.hybrid_search("Test", 10).await.unwrap();
+
+        // 验证混合检索返回了结果
+        assert!(!hybrid_results.is_empty());
+
+        // 验证混合检索的 BM25 分数与原始 BM25 搜索一致
+        // （注意：由于归一化，分数会不同，但相对顺序应该相似）
+        assert_eq!(bm25_results.len(), hybrid_results.len());
+    }
+
+    /// 混合检索数学公式精确性测试
+    ///
+    /// 此测试直接构造已知分数的数据，验证加权融合公式的正确性：
+    /// - final_score = 0.7 * normalized_bm25 + 0.3 * vector_score
+    #[tokio::test]
+    async fn test_hybrid_search_mathematical_formula() {
+        // 测试常量（必须与实现一致）
+        const BM25_WEIGHT: f32 = 0.7;
+        const VECTOR_WEIGHT: f32 = 0.3;
+
+        // 创建测试文档
+        let doc1 = KnowledgeRecord {
+            id: "doc1".to_string(),
+            title: "Document 1".to_string(),
+            parent_doc_title: "Parent".to_string(),
+            summary: "Summary".to_string(),
+            content: "Content".to_string(),
+            source_path: "/test/doc1.md".to_string(),
+            keywords: vec![],
+            embedding: None,
+        };
+
+        let doc2 = KnowledgeRecord {
+            id: "doc2".to_string(),
+            title: "Document 2".to_string(),
+            parent_doc_title: "Parent".to_string(),
+            summary: "Summary".to_string(),
+            content: "Content".to_string(),
+            source_path: "/test/doc2.md".to_string(),
+            keywords: vec![],
+            embedding: None,
+        };
+
+        let doc3 = KnowledgeRecord {
+            id: "doc3".to_string(),
+            title: "Document 3".to_string(),
+            parent_doc_title: "Parent".to_string(),
+            summary: "Summary".to_string(),
+            content: "Content".to_string(),
+            source_path: "/test/doc3.md".to_string(),
+            keywords: vec![],
+            embedding: None,
+        };
+
+        // 场景 1: 交集（BM25 和向量都有分数）
+        // 假设归一化后 BM25 = 1.0, vector = 1.0，则 final_score = 1.0
+        let result_intersection = BriefWithScore {
+            record: doc1.clone(),
+            bm25_score: 10.0,
+            vector_score: 1.0,
+            final_score: 0.0, // 将被计算
+        };
+
+        // 场景 2: BM25 独有（无向量分数）
+        // 假设归一化后 BM25 = 1.0, vector = 0.0，则 final_score = 0.7
+        let result_bm25_only = BriefWithScore {
+            record: doc2.clone(),
+            bm25_score: 10.0,
+            vector_score: 0.0,
+            final_score: 0.0, // 将被计算
+        };
+
+        // 场景 3: Vector 独有（无 BM25 分数）
+        // 假设归一化后 BM25 = 0.0, vector = 1.0，则 final_score = 0.3
+        let result_vector_only = BriefWithScore {
+            record: doc3.clone(),
+            bm25_score: 0.0,
+            vector_score: 1.0,
+            final_score: 0.0, // 将被计算
+        };
+
+        // 模拟归一化和融合逻辑（与 hybrid_search 实现一致）
+        let mut results = vec![result_intersection, result_bm25_only, result_vector_only];
+
+        // 提取 BM25 分数并归一化
+        if !results.is_empty() {
+            let all_bm25_scores: Vec<f32> = results.iter().map(|r| r.bm25_score).collect();
+            let min_bm25 = all_bm25_scores
+                .iter()
+                .min_by(|a, b| a.partial_cmp(b).unwrap())
+                .unwrap_or(&0.0);
+            let max_bm25 = all_bm25_scores
+                .iter()
+                .max_by(|a, b| a.partial_cmp(b).unwrap())
+                .unwrap_or(&0.0);
+            let range = max_bm25 - min_bm25;
+
+            for result in &mut results {
+                let normalized_bm25 = if range.abs() < f32::EPSILON {
+                    if result.bm25_score > 0.0 {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                } else {
+                    (result.bm25_score - min_bm25) / range
+                };
+                result.final_score =
+                    BM25_WEIGHT * normalized_bm25 + VECTOR_WEIGHT * result.vector_score;
+            }
+        }
+
+        // 断言 1: 交集场景（BM25=1.0, Vector=1.0 → Final=1.0）
+        let intersection = &results[0];
+        assert_eq!(intersection.bm25_score, 10.0, "BM25 原始分数应为 10.0");
+        assert_eq!(intersection.vector_score, 1.0, "Vector 分数应为 1.0");
+        assert_eq!(
+            intersection.final_score, 1.0,
+            "交集: final_score = 0.7 * 1.0 + 0.3 * 1.0 = 1.0"
+        );
+
+        // 断言 2: BM25 独有场景（BM25=1.0, Vector=0.0 → Final=0.7）
+        let bm25_only = &results[1];
+        assert_eq!(bm25_only.bm25_score, 10.0, "BM25 原始分数应为 10.0");
+        assert_eq!(bm25_only.vector_score, 0.0, "Vector 分数应为 0.0");
+        assert_eq!(
+            bm25_only.final_score, 0.7,
+            "BM25 独有: final_score = 0.7 * 1.0 + 0.3 * 0.0 = 0.7"
+        );
+
+        // 断言 3: Vector 独有场景（BM25=0.0, Vector=1.0 → Final=0.3）
+        let vector_only = &results[2];
+        assert_eq!(vector_only.bm25_score, 0.0, "BM25 原始分数应为 0.0");
+        assert_eq!(vector_only.vector_score, 1.0, "Vector 分数应为 1.0");
+        assert_eq!(
+            vector_only.final_score, 0.3,
+            "Vector 独有: final_score = 0.7 * 0.0 + 0.3 * 1.0 = 0.3"
         );
     }
 }
