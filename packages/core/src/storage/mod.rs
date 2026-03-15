@@ -2055,6 +2055,9 @@ mod tests {
             .await
             .unwrap();
 
+        // 统一的测试限制参数，确保两个搜索方法的分页边界契约一致
+        let test_limit = 10;
+
         // 添加文档
         for i in 0..3 {
             let doc = ParsedDoc {
@@ -2068,8 +2071,8 @@ mod tests {
         }
 
         // 分别调用 BM25 和混合检索
-        let bm25_results = store.search("Test", 100).await.unwrap();
-        let hybrid_results = store.hybrid_search("Test", 10).await.unwrap();
+        let bm25_results = store.search("Test", test_limit).await.unwrap();
+        let hybrid_results = store.hybrid_search("Test", test_limit).await.unwrap();
 
         // 验证混合检索返回了结果
         assert!(!hybrid_results.is_empty());
