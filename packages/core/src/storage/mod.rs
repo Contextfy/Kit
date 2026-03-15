@@ -681,7 +681,8 @@ impl KnowledgeStore {
         }
 
         // 计算召回数量（top_k * RECALL_MULTIPLIER 保证召回率）
-        let recall_n = top_k * RECALL_MULTIPLIER;
+        // 使用 saturating_mul 防止整数溢出，溢出时返回 usize::MAX
+        let recall_n = top_k.saturating_mul(RECALL_MULTIPLIER);
 
         // 【并发检索】使用 tokio::join! 并发执行 BM25 和向量搜索
         // Rust 允许多个不可变借用 (&self) 并发存在，所以这里是安全的
@@ -1646,7 +1647,13 @@ mod tests {
         let vec_a: Vec<f32> = (0..384).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
         let vec_b: Vec<f32> = (0..384).map(|i| if i == 1 { 1.0 } else { 0.0 }).collect();
         let vec_c: Vec<f32> = (0..384)
-            .map(|i| if i < 2 { std::f32::consts::FRAC_1_SQRT_2 } else { 0.0 })
+            .map(|i| {
+                if i < 2 {
+                    std::f32::consts::FRAC_1_SQRT_2
+                } else {
+                    0.0
+                }
+            })
             .collect();
 
         // 创建三个文档
@@ -1891,7 +1898,13 @@ mod tests {
         let vec_a: Vec<f32> = (0..384).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
         let vec_b: Vec<f32> = (0..384).map(|i| if i == 1 { 1.0 } else { 0.0 }).collect();
         let vec_c: Vec<f32> = (0..384)
-            .map(|i| if i < 2 { std::f32::consts::FRAC_1_SQRT_2 } else { 0.0 })
+            .map(|i| {
+                if i < 2 {
+                    std::f32::consts::FRAC_1_SQRT_2
+                } else {
+                    0.0
+                }
+            })
             .collect();
 
         let doc_a = KnowledgeRecord {
