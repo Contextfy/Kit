@@ -15,7 +15,7 @@ pub(crate) const DEFAULT_SEARCH_LIMIT: usize = 100;
 /// * `title` - 记录标题
 /// * `parent_doc_title` - 父文档的标题
 /// * `summary` - 内容摘要（智能提取首段或代码块，最多 1000 字符）
-/// * `score` - BM25 相关性分数
+/// * `score` - 相关性分数（scout 纯文本检索返回 BM25 分数，hybrid_scout 混合检索返回融合后的最终分数）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Brief {
     pub id: String,

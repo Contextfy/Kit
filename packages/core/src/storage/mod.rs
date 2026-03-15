@@ -16,6 +16,66 @@ use uuid::Uuid;
 /// 然后在合并后通过加权融合和排序选出最终的 top_k 条。
 const RECALL_MULTIPLIER: usize = 2;
 
+/// 归一化 BM25 分数并计算融合分数
+///
+/// 此函数处理混合检索中的分数归一化和加权融合：
+/// 1. 清理非有限值（NaN、Infinity）→ 重置为 0.0
+/// 2. 使用 Min-Max 归一化将 BM25 分数映射到 [0, 1]
+/// 3. 按权重计算最终分数：final_score = bm25_weight * normalized_bm25 + vector_weight * vector_score
+///
+/// # 参数
+///
+/// * `results` - 要处理的结果列表（就地修改）
+/// * `bm25_weight` - BM25 权重（通常 0.7）
+/// * `vector_weight` - 向量权重（通常 0.3）
+fn normalize_and_fuse_scores(results: &mut [BriefWithScore], bm25_weight: f32, vector_weight: f32) {
+    if results.is_empty() {
+        return;
+    }
+
+    // 步骤 1: 清理非有限值（NaN、Infinity），避免排序 panic
+    for result in results.iter_mut() {
+        if !result.bm25_score.is_finite() {
+            result.bm25_score = 0.0;
+        }
+        if !result.vector_score.is_finite() {
+            result.vector_score = 0.0;
+        }
+    }
+
+    // 步骤 2: 提取 BM25 分数并计算极值（使用 total_cmp 避免 NaN panic）
+    let all_bm25_scores: Vec<f32> = results.iter().map(|r| r.bm25_score).collect();
+    let min_bm25 = all_bm25_scores
+        .iter()
+        .filter(|s| s.is_finite())
+        .min_by(|a, b| a.total_cmp(b))
+        .copied()
+        .unwrap_or(0.0);
+    let max_bm25 = all_bm25_scores
+        .iter()
+        .filter(|s| s.is_finite())
+        .max_by(|a, b| a.total_cmp(b))
+        .copied()
+        .unwrap_or(0.0);
+    let range = max_bm25 - min_bm25;
+
+    // 步骤 3: 归一化并计算最终分数
+    for result in results.iter_mut() {
+        let normalized_bm25 = if range.abs() < f32::EPSILON {
+            // 所有分数相同或只有向量结果
+            if result.bm25_score > 0.0 {
+                1.0
+            } else {
+                0.0
+            }
+        } else {
+            // Min-Max 归一化
+            (result.bm25_score - min_bm25) / range
+        };
+        result.final_score = bm25_weight * normalized_bm25 + vector_weight * result.vector_score;
+    }
+}
+
 /// 知识库中的一条记录
 ///
 /// # 字段
@@ -383,12 +443,9 @@ impl KnowledgeStore {
             }
         }
 
-        // 按匹配分数降序排序，分数相同时使用 ID 作为确定性 tie-breaker
-        scored_records.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.id.cmp(&b.0.id))
-        });
+        // 按匹配分数降序排序（使用 total_cmp 避免 NaN panic）
+        // 分数相同时使用 ID 作为确定性 tie-breaker
+        scored_records.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.id.cmp(&b.0.id)));
 
         // 严格遵守 limit 契约，防止内存溢出
         scored_records.truncate(limit);
@@ -524,13 +581,9 @@ impl KnowledgeStore {
         // 释放读锁
         drop(cache);
 
-        // 按相似度降序排序（确定性排序：分数相同时按 ID 排序）
-        scored_records.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                // 分数相同时，按文档 ID 稳定排序
-                .then_with(|| a.0.id.cmp(&b.0.id))
-        });
+        // 按相似度降序排序（使用 total_cmp 避免 NaN panic）
+        // 分数相同时，按文档 ID 稳定排序
+        scored_records.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.id.cmp(&b.0.id)));
 
         // 截取前 K 个结果
         scored_records.truncate(limit);
@@ -684,49 +737,19 @@ impl KnowledgeStore {
             }
         }
 
-        // 【加权融合】计算最终分数
-        const BM25_WEIGHT: f32 = 0.7;
-        const VECTOR_WEIGHT: f32 = 0.3;
-
         // 转换为 Vec 并计算最终分数
         let mut results: Vec<BriefWithScore> = merged_results.into_values().collect();
 
-        // 重新计算归一化 BM25 分数和最终分数
-        if !results.is_empty() {
-            // 提取所有 BM25 分数并归一化
-            let all_bm25_scores: Vec<f32> = results.iter().map(|r| r.bm25_score).collect();
-            let min_bm25 = all_bm25_scores
-                .iter()
-                .min_by(|a, b| a.partial_cmp(b).unwrap())
-                .unwrap_or(&0.0);
-            let max_bm25 = all_bm25_scores
-                .iter()
-                .max_by(|a, b| a.partial_cmp(b).unwrap())
-                .unwrap_or(&0.0);
-            let range = max_bm25 - min_bm25;
+        // 【加权融合】使用独立函数归一化并计算最终分数
+        const BM25_WEIGHT: f32 = 0.7;
+        const VECTOR_WEIGHT: f32 = 0.3;
+        normalize_and_fuse_scores(&mut results, BM25_WEIGHT, VECTOR_WEIGHT);
 
-            for result in &mut results {
-                let normalized_bm25 = if range.abs() < f32::EPSILON {
-                    // 所有分数相同或只有向量结果
-                    if result.bm25_score > 0.0 {
-                        1.0
-                    } else {
-                        0.0
-                    }
-                } else {
-                    // Min-Max 归一化
-                    (result.bm25_score - min_bm25) / range
-                };
-                result.final_score =
-                    BM25_WEIGHT * normalized_bm25 + VECTOR_WEIGHT * result.vector_score;
-            }
-        }
-
-        // 【安全排序】按 final_score 降序排序，分数相同时使用 ID 作为 tie-breaker
+        // 【安全排序】按 final_score 降序排序（使用 total_cmp 避免 NaN panic）
+        // 分数相同时使用 ID 作为 tie-breaker（确定性排序）
         results.sort_by(|a, b| {
             b.final_score
-                .partial_cmp(&a.final_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&a.final_score)
                 .then_with(|| a.record.id.cmp(&b.record.id))
         });
 
@@ -1622,7 +1645,9 @@ mod tests {
 
         let vec_a: Vec<f32> = (0..384).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
         let vec_b: Vec<f32> = (0..384).map(|i| if i == 1 { 1.0 } else { 0.0 }).collect();
-        let vec_c: Vec<f32> = (0..384).map(|i| if i < 2 { 0.7071 } else { 0.0 }).collect();
+        let vec_c: Vec<f32> = (0..384)
+            .map(|i| if i < 2 { std::f32::consts::FRAC_1_SQRT_2 } else { 0.0 })
+            .collect();
 
         // 创建三个文档
         let doc_a = KnowledgeRecord {
@@ -1865,7 +1890,9 @@ mod tests {
         // 创建 3 个文档并手动赋予向量
         let vec_a: Vec<f32> = (0..384).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
         let vec_b: Vec<f32> = (0..384).map(|i| if i == 1 { 1.0 } else { 0.0 }).collect();
-        let vec_c: Vec<f32> = (0..384).map(|i| if i < 2 { 0.7071 } else { 0.0 }).collect();
+        let vec_c: Vec<f32> = (0..384)
+            .map(|i| if i < 2 { std::f32::consts::FRAC_1_SQRT_2 } else { 0.0 })
+            .collect();
 
         let doc_a = KnowledgeRecord {
             id: "doc-a".to_string(),
@@ -2041,7 +2068,7 @@ mod tests {
 
     /// 混合检索数学公式精确性测试
     ///
-    /// 此测试直接构造已知分数的数据，验证加权融合公式的正确性：
+    /// 此测试直接调用 `normalize_and_fuse_scores` 函数，验证加权融合公式的正确性：
     /// - final_score = 0.7 * normalized_bm25 + 0.3 * vector_score
     #[tokio::test]
     async fn test_hybrid_search_mathematical_formula() {
@@ -2110,36 +2137,9 @@ mod tests {
             final_score: 0.0, // 将被计算
         };
 
-        // 模拟归一化和融合逻辑（与 hybrid_search 实现一致）
+        // 直接调用 normalize_and_fuse_scores 函数（与生产环境一致）
         let mut results = vec![result_intersection, result_bm25_only, result_vector_only];
-
-        // 提取 BM25 分数并归一化
-        if !results.is_empty() {
-            let all_bm25_scores: Vec<f32> = results.iter().map(|r| r.bm25_score).collect();
-            let min_bm25 = all_bm25_scores
-                .iter()
-                .min_by(|a, b| a.partial_cmp(b).unwrap())
-                .unwrap_or(&0.0);
-            let max_bm25 = all_bm25_scores
-                .iter()
-                .max_by(|a, b| a.partial_cmp(b).unwrap())
-                .unwrap_or(&0.0);
-            let range = max_bm25 - min_bm25;
-
-            for result in &mut results {
-                let normalized_bm25 = if range.abs() < f32::EPSILON {
-                    if result.bm25_score > 0.0 {
-                        1.0
-                    } else {
-                        0.0
-                    }
-                } else {
-                    (result.bm25_score - min_bm25) / range
-                };
-                result.final_score =
-                    BM25_WEIGHT * normalized_bm25 + VECTOR_WEIGHT * result.vector_score;
-            }
-        }
+        normalize_and_fuse_scores(&mut results, BM25_WEIGHT, VECTOR_WEIGHT);
 
         // 断言 1: 交集场景（BM25=1.0, Vector=1.0 → Final=1.0）
         let intersection = &results[0];
@@ -2167,5 +2167,131 @@ mod tests {
             vector_only.final_score, 0.3,
             "Vector 独有: final_score = 0.7 * 0.0 + 0.3 * 1.0 = 0.3"
         );
+    }
+
+    /// NaN 和 Infinity 边界处理测试
+    ///
+    /// 此测试验证 `normalize_and_fuse_scores` 函数能够安全处理非有限值：
+    /// - NaN 被重置为 0.0，不会导致 panic
+    /// - Infinity 被重置为 0.0，不会导致数值溢出
+    /// - 排序时使用 total_cmp，确保确定性结果
+    #[tokio::test]
+    async fn test_hybrid_search_nan_and_infinity_handling() {
+        const BM25_WEIGHT: f32 = 0.7;
+        const VECTOR_WEIGHT: f32 = 0.3;
+
+        // 创建测试文档
+        let doc1 = KnowledgeRecord {
+            id: "doc1".to_string(),
+            title: "Document 1".to_string(),
+            parent_doc_title: "Parent".to_string(),
+            summary: "Summary".to_string(),
+            content: "Content".to_string(),
+            source_path: "/test/doc1.md".to_string(),
+            keywords: vec![],
+            embedding: None,
+        };
+
+        let doc2 = KnowledgeRecord {
+            id: "doc2".to_string(),
+            title: "Document 2".to_string(),
+            parent_doc_title: "Parent".to_string(),
+            summary: "Summary".to_string(),
+            content: "Content".to_string(),
+            source_path: "/test/doc2.md".to_string(),
+            keywords: vec![],
+            embedding: None,
+        };
+
+        let doc3 = KnowledgeRecord {
+            id: "doc3".to_string(),
+            title: "Document 3".to_string(),
+            parent_doc_title: "Parent".to_string(),
+            summary: "Summary".to_string(),
+            content: "Content".to_string(),
+            source_path: "/test/doc3.md".to_string(),
+            keywords: vec![],
+            embedding: None,
+        };
+
+        let doc4 = KnowledgeRecord {
+            id: "doc4".to_string(),
+            title: "Document 4".to_string(),
+            parent_doc_title: "Parent".to_string(),
+            summary: "Summary".to_string(),
+            content: "Content".to_string(),
+            source_path: "/test/doc4.md".to_string(),
+            keywords: vec![],
+            embedding: None,
+        };
+
+        // 故意注入脏数据：NaN、Infinity
+        let result_nan = BriefWithScore {
+            record: doc1.clone(),
+            bm25_score: f32::NAN,
+            vector_score: 1.0,
+            final_score: 0.0,
+        };
+
+        let result_infinity = BriefWithScore {
+            record: doc2.clone(),
+            bm25_score: f32::INFINITY,
+            vector_score: 1.0,
+            final_score: 0.0,
+        };
+
+        let result_neg_infinity = BriefWithScore {
+            record: doc3.clone(),
+            bm25_score: f32::NEG_INFINITY,
+            vector_score: 1.0,
+            final_score: 0.0,
+        };
+
+        // 正常结果作为对照
+        let result_normal = BriefWithScore {
+            record: doc4.clone(),
+            bm25_score: 10.0,
+            vector_score: 1.0,
+            final_score: 0.0,
+        };
+
+        // 调用函数，验证不会 panic
+        let mut results = vec![
+            result_nan,
+            result_infinity,
+            result_neg_infinity,
+            result_normal,
+        ];
+        normalize_and_fuse_scores(&mut results, BM25_WEIGHT, VECTOR_WEIGHT);
+
+        // 验证：脏数据被安全处理
+        // NaN 和 Infinity 都应该被重置为 0.0
+        // 因此归一化后为 0.0，最终分数 = 0.3 * 1.0 = 0.3
+        for result in &results[0..3] {
+            assert!(
+                result.bm25_score.is_finite(),
+                "BM25 分数应该是有限值，得到 {}",
+                result.bm25_score
+            );
+            assert_eq!(
+                result.final_score, 0.3,
+                "脏数据的最终分数应为 0.3（BM25 归一化为 0.0，Vector 为 1.0）"
+            );
+        }
+
+        // 验证：正常结果保持高分
+        // 正常的 10.0 会归一化为 1.0，最终分数 = 0.7 * 1.0 + 0.3 * 1.0 = 1.0
+        let normal_result = &results[3];
+        assert_eq!(normal_result.final_score, 1.0, "正常结果应为满分 1.0");
+
+        // 验证排序稳定性：按 final_score 降序，使用 total_cmp 和 ID tie-breaker
+        results.sort_by(|a, b| {
+            b.final_score
+                .total_cmp(&a.final_score)
+                .then_with(|| a.record.id.cmp(&b.record.id))
+        });
+
+        // 正常结果应该排在最前面（分数为 1.0）
+        assert_eq!(&results[0].record.id, "doc4", "正常结果应排在第一位");
     }
 }

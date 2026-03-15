@@ -71,7 +71,7 @@ pub mod contextfy {
         /// ```
         #[napi]
         pub async fn scout(&self, _query: String) -> napi::Result<Vec<Brief>> {
-            Err(napi::Error::from_reason("scout not implemented").into())
+            Err(napi::Error::from_reason("scout not implemented"))
         }
 
         /// Retrieves detailed information about a specific record.
