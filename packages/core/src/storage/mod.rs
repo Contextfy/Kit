@@ -57,16 +57,17 @@ fn normalize_and_fuse_scores(results: &mut [BriefWithScore], bm25_weight: f32, v
     }
 
     // 步骤 2: 提取 BM25 分数并计算极值（使用 total_cmp 避免 NaN panic）
+    // 关键修复：过滤掉 0.0 分数，这些来自仅向量召回的结果，不应污染 BM25 归一化区间
     let all_bm25_scores: Vec<f32> = results.iter().map(|r| r.bm25_score).collect();
     let min_bm25 = all_bm25_scores
         .iter()
-        .filter(|s| s.is_finite())
+        .filter(|s| s.is_finite() && **s > 0.0)
         .min_by(|a, b| a.total_cmp(b))
         .copied()
         .unwrap_or(0.0);
     let max_bm25 = all_bm25_scores
         .iter()
-        .filter(|s| s.is_finite())
+        .filter(|s| s.is_finite() && **s > 0.0)
         .max_by(|a, b| a.total_cmp(b))
         .copied()
         .unwrap_or(0.0);

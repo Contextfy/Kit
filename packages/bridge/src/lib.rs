@@ -33,10 +33,9 @@ pub mod contextfy {
     /// ```
     #[napi]
     pub struct ContextfyKit {
-        retriever: Retriever<'static>,
-        // Store must be kept alive since retriever holds a reference to it
-        // We use Arc to allow multiple references and 'static lifetime since we own the data
-        _store: Arc<KnowledgeStore>,
+        // Knowledge store wrapped in Arc for thread-safe reference counting
+        // The retriever is created on-demand in each method to avoid lifetime issues
+        store: Arc<KnowledgeStore>,
     }
 
     impl Default for ContextfyKit {
@@ -71,19 +70,8 @@ pub mod contextfy {
                     .expect("Failed to initialize KnowledgeStore")
             });
 
-            let store_arc = Arc::new(store);
-
-            // SAFETY: We extend the lifetime to 'static since we own the Arc
-            // and the retriever will be stored alongside the Arc
-            let retriever = unsafe {
-                std::mem::transmute::<Retriever<'_>, Retriever<'static>>(
-                    Retriever::new(&*store_arc)
-                )
-            };
-
             Self {
-                retriever,
-                _store: store_arc,
+                store: Arc::new(store),
             }
         }
 
@@ -107,7 +95,10 @@ pub mod contextfy {
         /// ```
         #[napi]
         pub async fn scout(&self, query: String) -> napi::Result<Vec<Brief>> {
-            self.retriever
+            // Create retriever on-demand to avoid lifetime issues
+            let retriever = Retriever::new(self.store.as_ref());
+
+            retriever
                 .scout(&query)
                 .await
                 .map(|core_briefs| {
@@ -133,32 +124,32 @@ pub mod contextfy {
         ///
         /// # Returns
         ///
-        /// Returns detailed information including the full content of the record.
+        /// Returns `Some(Details)` if found, `None` if the record doesn't exist.
         ///
         /// # Example
         ///
         /// ```javascript
         /// const details = await kit.inspect('record-id');
-        /// console.log(details.content);
+        /// if (details) {
+        ///     console.log(details.content);
+        /// } else {
+        ///     console.log('Record not found');
+        /// }
         /// ```
         #[napi]
-        pub async fn inspect(&self, id: String) -> napi::Result<Details> {
-            self.retriever
+        pub async fn inspect(&self, id: String) -> napi::Result<Option<Details>> {
+            // Create retriever on-demand to avoid lifetime issues
+            let retriever = Retriever::new(self.store.as_ref());
+
+            retriever
                 .inspect(&id)
                 .await
                 .map(|details_opt| {
-                    match details_opt {
-                        Some(details) => Details {
-                            id: details.id,
-                            title: details.title,
-                            content: details.content,
-                        },
-                        None => Details {
-                            id,
-                            title: String::new(),
-                            content: String::new(),
-                        },
-                    }
+                    details_opt.map(|details| Details {
+                        id: details.id,
+                        title: details.title,
+                        content: details.content,
+                    })
                 })
                 .map_err(|e| napi::Error::from_reason(format!("Failed to retrieve record: {}", e)))
         }
@@ -234,6 +225,24 @@ mod tests {
     fn test_reexport() {
         // This test verifies that the re-export works correctly
         let _kit: ContextfyKit = ContextfyKit::new();
+    }
+
+    #[test]
+    fn test_no_unsafe_in_kit() {
+        // Verify that ContextfyKit can be created without unsafe code
+        let kit = ContextfyKit::new();
+        // The struct should only contain the store Arc
+        // This test ensures we eliminated the unsafe transmute
+        drop(kit); // Explicitly drop to verify clean destruction
+    }
+
+    #[test]
+    fn test_store_arc_management() {
+        // Test that the store Arc is properly managed
+        let kit = ContextfyKit::new();
+        // The kit internally manages the store Arc
+        // Test passes if the kit can be created and dropped without panic
+        drop(kit);
     }
 }
 

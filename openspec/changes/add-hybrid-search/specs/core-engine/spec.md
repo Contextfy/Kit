@@ -19,7 +19,8 @@ The core engine SHALL provide hybrid search that combines BM25 keyword matching 
 #### Scenario: BM25 分数归一化处理
 
 - **当**系统执行 BM25 分数 Min-Max 归一化时
-- **则**系统找出所有 BM25 分数的 `min` 和 `max` 值
+- **则**系统找出所有**有效** BM25 分数（大于 0.0 且为有限值）的 `min` 和 `max` 值
+- **并且**系统过滤掉 0.0 分数（来自仅向量召回的结果）避免污染归一化区间
 - **并且**系统使用公式 `normalized = (score - min) / (max - min)` 计算归一化分数
 - **如果** `max` 和 `min` 极度接近（`abs(max - min) < f32::EPSILON`），系统检查原始 BM25 分数：
   - 当原始分数 `> 0` 时，归一化为 `1.0`
@@ -87,7 +88,7 @@ The core engine SHALL provide hybrid search that combines BM25 keyword matching 
 #### Scenario: 混合检索与分数融合
 
 - **当**系统计算最终融合分数时
-- **则**系统使用 Min-Max 归一化公式：`normalized_bm25 = (bm25_score - min_bm25) / (max_bm25 - min_bm25)`
+- **则**系统使用 Min-Max 归一化公式：`normalized_bm25 = (bm25_score - min_bm25) / (max_bm25 - min_bm25)`，其中 `min_bm25` 和 `max_bm25` 仅包含大于 0.0 的有效 BM25 分数
 - **并且**系统使用加权融合公式：`final_score = 0.7 * normalized_bm25 + 0.3 * vector_score`
 - **并且**系统确保当文档同时具有 BM25 分数和向量分数时（归一化后均为 1.0），最终分数为 1.0
 - **并且**系统确保当文档仅有 BM25 分数（归一化后为 1.0）时，最终分数为 0.7

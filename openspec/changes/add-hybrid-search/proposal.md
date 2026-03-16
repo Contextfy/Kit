@@ -12,7 +12,7 @@
 - BM25 分数归一化：使用 Min-Max 归一化 `(score - min) / (max - min)`，处理除零情况（当 abs(max - min) < f32::EPSILON 时，如果 bm25_score > 0 则取 1.0，否则取 0.0）
 - 结果交并集：使用 `HashMap<String, BriefWithScore>` 按文档 ID 合并两路结果，缺失分数设为 0.0
 - 加权融合：按 `final_score = 0.7 * normalized_bm25 + 0.3 * vector_score` 计算最终得分
-- 安全排序：使用 `partial_cmp` 结合 `record.id` 打破平局，降序排序后截取 `top_k`
+- 安全排序：使用 `total_cmp` 结合 `record.id` 打破平局，降序排序后截取 `top_k`
 - 优雅降级：当向量搜索失败或无模型时，平滑退化为纯 BM25 搜索
 - 并发检索：使用 `tokio::join!` 并发执行 BM25 和向量搜索（如借用允许）
 - 单元测试：验证归一化逻辑、权重计算、降级场景
@@ -25,6 +25,7 @@
 - Affected code:
   - packages/core/src/storage/mod.rs（新增 `hybrid_search` 方法和 `BriefWithScore` 结构体，修复 `search` 方法的 limit 契约）
   - packages/core/src/retriever/mod.rs（新增 `hybrid_scout` 方法，消除魔法数字，添加单元测试）
+  - packages/bridge/src/lib.rs（Bridge 层接入核心检索实现，重构生命周期）
 
 ### Performance Implications
 
