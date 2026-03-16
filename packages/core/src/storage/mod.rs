@@ -16,6 +16,19 @@ use uuid::Uuid;
 /// 然后在合并后通过加权融合和排序选出最终的 top_k 条。
 const RECALL_MULTIPLIER: usize = 2;
 
+/// 最大允许的 top_k 值
+///
+/// 防止恶意或错误的超大 top_k 导致内存溢出。设置为 10,000 是因为：
+/// - 大多数实际应用场景下，用户不会查看超过 100-1000 条结果
+/// - 10,000 条结果的内存占用约为 10MB × 10,000 = 100MB（估算）
+/// - 为极端场景留出安全边界
+const MAX_TOP_K: usize = 10_000;
+
+/// 最大召回数量
+///
+/// 等于 MAX_TOP_K * RECALL_MULTIPLIER，用于限制 BM25 和向量搜索的召回数量。
+const MAX_RECALL_N: usize = MAX_TOP_K * RECALL_MULTIPLIER;
+
 /// 归一化 BM25 分数并计算融合分数
 ///
 /// 此函数处理混合检索中的分数归一化和加权融合：
@@ -623,6 +636,130 @@ impl KnowledgeStore {
         self.do_vector_search(query_vector, limit).await
     }
 
+    /// 测试专用：使用预设查询向量进行混合检索
+    ///
+    /// **【测试专用方法】** 此方法仅用于单元测试，允许跳过 EmbeddingModel 推理直接传入查询向量。
+    ///
+    /// **设计目的**：
+    /// - **分离模型推理成本**：EmbeddingModel 推理（~50ms）会干扰性能测试，此方法让测试聚焦于核心融合逻辑
+    /// - **可控的测试数据**：使用手动构造的向量可以精确控制相似度关系
+    /// - **快速反馈**：单元测试应快速运行（< 100ms），不等待模型推理
+    ///
+    /// **代码路径**：此方法复用 `hybrid_search()` 的核心逻辑，唯一区别是使用 `do_vector_search()` 而非 `vector_search()`。
+    ///
+    /// **注意**：生产环境应使用 `hybrid_search()` 方法，集成测试应验证完整的 EmbeddingModel 集成。
+    ///
+    /// # 参数
+    ///
+    /// * `query` - 查询文本（用于 BM25 搜索）
+    /// * `query_vector` - 预设的 384 维查询向量（用于向量搜索）
+    /// * `top_k` - 返回结果的最大数量
+    ///
+    /// # 返回
+    ///
+    /// 按 `final_score` 降序排列的 `BriefWithScore` 列表
+    #[cfg(test)]
+    async fn hybrid_search_with_query_vector(
+        &self,
+        query: &str,
+        query_vector: &[f32],
+        top_k: usize,
+    ) -> Result<Vec<BriefWithScore>> {
+        // 边界条件检查
+        if top_k == 0 || query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 【OOM 防护】验证 top_k 不超过最大允许值
+        if top_k > MAX_TOP_K {
+            return Err(anyhow::anyhow!(
+                "top_k {} exceeds maximum allowed value of {}. \
+                 This limit prevents potential memory overflow issues.",
+                top_k, MAX_TOP_K
+            ));
+        }
+
+        // 计算召回数量
+        let recall_n = top_k
+            .checked_mul(RECALL_MULTIPLIER)
+            .unwrap_or(MAX_RECALL_N)
+            .min(MAX_RECALL_N);
+
+        // 【并发检索】使用 tokio::join! 并发执行 BM25 和向量搜索
+        let (bm25_results, vector_results) = tokio::join!(
+            self.search(query, recall_n),
+            self.do_vector_search(query_vector, recall_n)
+        );
+
+        // 处理 BM25 搜索失败情况
+        let bm25_results = bm25_results?;
+
+        // 处理向量搜索失败情况（优雅降级）
+        let vector_results = match vector_results {
+            Ok(results) => results,
+            Err(e) => {
+                eprintln!(
+                    "Warning: Vector search failed: {}. Falling back to BM25-only search.",
+                    e
+                );
+                Vec::new()
+            }
+        };
+
+        // 【结果交并集】使用 HashMap 按文档 ID 合并两路结果
+        let mut merged_results: HashMap<String, BriefWithScore> = HashMap::new();
+
+        // 插入 BM25 结果
+        for (record, bm25_score) in bm25_results {
+            merged_results.insert(
+                record.id.clone(),
+                BriefWithScore {
+                    record,
+                    bm25_score,
+                    vector_score: 0.0,
+                    final_score: 0.0,
+                },
+            );
+        }
+
+        // 更新向量分数
+        for (record, vector_score) in vector_results {
+            if let Some(result) = merged_results.get_mut(&record.id) {
+                result.vector_score = vector_score;
+            } else {
+                merged_results.insert(
+                    record.id.clone(),
+                    BriefWithScore {
+                        record,
+                        bm25_score: 0.0,
+                        vector_score,
+                        final_score: 0.0,
+                    },
+                );
+            }
+        }
+
+        // 转换为 Vec 并计算最终分数
+        let mut results: Vec<BriefWithScore> = merged_results.into_values().collect();
+
+        // 【加权融合】
+        const BM25_WEIGHT: f32 = 0.7;
+        const VECTOR_WEIGHT: f32 = 0.3;
+        normalize_and_fuse_scores(&mut results, BM25_WEIGHT, VECTOR_WEIGHT);
+
+        // 【安全排序】
+        results.sort_by(|a, b| {
+            b.final_score
+                .total_cmp(&a.final_score)
+                .then_with(|| a.record.id.cmp(&b.record.id))
+        });
+
+        // 截取前 top_k 个结果
+        results.truncate(top_k);
+
+        Ok(results)
+    }
+
     /// 混合检索（Hybrid Search）：结合 BM25 和向量语义搜索
     ///
     /// 通过并发执行 BM25 全文搜索和向量语义搜索，归一化分数后按权重融合，
@@ -680,9 +817,21 @@ impl KnowledgeStore {
             return Ok(Vec::new());
         }
 
+        // 【OOM 防护】验证 top_k 不超过最大允许值
+        if top_k > MAX_TOP_K {
+            return Err(anyhow::anyhow!(
+                "top_k {} exceeds maximum allowed value of {}. \
+                 This limit prevents potential memory overflow issues.",
+                top_k, MAX_TOP_K
+            ));
+        }
+
         // 计算召回数量（top_k * RECALL_MULTIPLIER 保证召回率）
-        // 使用 saturating_mul 防止整数溢出，溢出时返回 usize::MAX
-        let recall_n = top_k.saturating_mul(RECALL_MULTIPLIER);
+        // 使用 checked_mul 防止整数溢出，并限制在 MAX_RECALL_N 范围内
+        let recall_n = top_k
+            .checked_mul(RECALL_MULTIPLIER)
+            .unwrap_or(MAX_RECALL_N)
+            .min(MAX_RECALL_N);
 
         // 【并发检索】使用 tokio::join! 并发执行 BM25 和向量搜索
         // Rust 允许多个不可变借用 (&self) 并发存在，所以这里是安全的
@@ -2309,5 +2458,165 @@ mod tests {
 
         // 正常结果应该排在最前面（分数为 1.0）
         assert_eq!(&results[0].record.id, "doc4", "正常结果应排在第一位");
+    }
+
+    /// 混合检索真实向量测试
+    ///
+    /// 此测试验证混合检索在存在真实向量时的正确行为：
+    /// - 验证 vector_score > 0.0（向量搜索生效）
+    /// - 验证 final_score 按照权重公式正确计算
+    /// - 验证 BM25 和向量分数能够正确融合
+    #[tokio::test]
+    async fn test_hybrid_search_with_real_vector() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let data_dir = temp_dir.path().to_str().unwrap();
+
+        // 创建 3 个文档，并手动赋予具有明确相似度关系的向量
+        // 注意：余弦相似度被映射到 [0, 1] 范围：(cos + 1) / 2
+        //
+        // 文档 A (高相关): [1.0, 0.0, 0.0, ...] - 与查询向量对齐
+        //   → cos = 1.0 → mapped = 1.0
+        // 文档 B (不相关): [0.0, 1.0, 0.0, ...] - 与查询向量正交
+        //   → cos = 0.0 → mapped = 0.5
+        // 文档 C (中相关): [1.0, 1.0, 0.0, ...] - 与查询向量成45度角
+        //   归一化后: [0.707, 0.707, 0.0, ...]
+        //   → cos = 0.707 → mapped = (0.707 + 1) / 2 = 0.8535
+        //
+        // 查询向量: [1.0, 0.0, 0.0, ...]
+        //
+        // 预期相似度排序: A (1.0) > C (~0.8535) > B (0.5)
+
+        let vec_a: Vec<f32> = (0..384).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
+        let vec_b: Vec<f32> = (0..384).map(|i| if i == 1 { 1.0 } else { 0.0 }).collect();
+        // 使用 [1.0, 1.0, 0.0, ...] 作为 45 度向量
+        // 归一化后为 [0.707, 0.707, 0.0, ...]，与查询向量 [1.0, 0.0, ...] 的余弦相似度为 0.707
+        let vec_c: Vec<f32> = (0..384).map(|i| if i == 0 || i == 1 { 1.0 } else { 0.0 }).collect();
+
+        // 创建三个文档，title 和 content 包含 "test" 以便 BM25 也能匹配
+        let doc_a = KnowledgeRecord {
+            id: "doc-a".to_string(),
+            title: "test document alpha".to_string(),
+            parent_doc_title: "Test".to_string(),
+            summary: "About test".to_string(),
+            content: "Test content alpha".to_string(),
+            source_path: "/test/a.md".to_string(),
+            keywords: vec![],
+            embedding: Some(vec_a),
+        };
+
+        let doc_b = KnowledgeRecord {
+            id: "doc-b".to_string(),
+            title: "test document beta".to_string(),
+            parent_doc_title: "Test".to_string(),
+            summary: "About test".to_string(),
+            content: "Test content beta".to_string(),
+            source_path: "/test/b.md".to_string(),
+            keywords: vec![],
+            embedding: Some(vec_b),
+        };
+
+        let doc_c = KnowledgeRecord {
+            id: "doc-c".to_string(),
+            title: "test document gamma".to_string(),
+            parent_doc_title: "Test".to_string(),
+            summary: "About test".to_string(),
+            content: "Test content gamma".to_string(),
+            source_path: "/test/c.md".to_string(),
+            keywords: vec![],
+            embedding: Some(vec_c),
+        };
+
+        // 写入磁盘
+        for doc in &[&doc_a, &doc_b, &doc_c] {
+            let json = serde_json::to_string_pretty(doc).unwrap();
+            let path = temp_dir.path().join(format!("{}.json", doc.id));
+            fs::write(&path, json).unwrap();
+        }
+
+        // 初始化 KnowledgeStore（无嵌入模型）
+        let store = KnowledgeStore::new(data_dir, None).await.unwrap();
+
+        // 构造查询向量: [1.0, 0.0, 0.0, ...]
+        // 这个向量与 doc-a 完全对齐（余弦相似度 1.0），与 doc-c 部分对齐（0.3），与 doc-b 垂直（0.0）
+        let query_vector: Vec<f32> = (0..384).map(|i| if i == 0 { 1.0 } else { 0.0 }).collect();
+
+        // 查询 "test"，应该匹配所有文档的 title（BM25 匹配）
+        let results = store
+            .hybrid_search_with_query_vector("test", &query_vector, 10)
+            .await
+            .unwrap();
+
+        // 验证结果不为空
+        assert!(!results.is_empty(), "Hybrid search should return results");
+
+        // 验证所有结果都有非零的 BM25 分数（因为 "test" 在所有文档的 title 中）
+        for result in &results {
+            assert!(
+                result.bm25_score > 0.0,
+                "BM25 score should be positive for document {}, got {}",
+                result.record.id,
+                result.bm25_score
+            );
+        }
+
+        // 验证向量分数存在且按预期排序
+        // doc-a 应该有最高的 vector_score (1.0)
+        // doc-c 应该有中等的 vector_score (~0.8535)
+        // doc-b 应该有最低的 vector_score (0.5)
+        let result_a = results.iter().find(|r| r.record.id == "doc-a");
+        let result_b = results.iter().find(|r| r.record.id == "doc-b");
+        let result_c = results.iter().find(|r| r.record.id == "doc-c");
+
+        assert!(result_a.is_some(), "Should find doc-a");
+        assert!(result_b.is_some(), "Should find doc-b");
+        assert!(result_c.is_some(), "Should find doc-c");
+
+        let result_a = result_a.unwrap();
+        let result_b = result_b.unwrap();
+        let result_c = result_c.unwrap();
+
+        // 验证向量分数符合预期（余弦相似度映射到 [0, 1]）
+        assert!(
+            (result_a.vector_score - 1.0).abs() < f32::EPSILON,
+            "doc-a vector_score should be 1.0, got {}",
+            result_a.vector_score
+        );
+        assert!(
+            (result_c.vector_score - 0.8535).abs() < 0.001,
+            "doc-c vector_score should be ~0.8535, got {}",
+            result_c.vector_score
+        );
+        assert!(
+            (result_b.vector_score - 0.5).abs() < 0.001,
+            "doc-b vector_score should be 0.5, got {}",
+            result_b.vector_score
+        );
+
+        // 验证最终分数按照权重公式计算: final_score = 0.7 * normalized_bm25 + 0.3 * vector_score
+        // 由于所有文档的 BM25 分数相同（"test" 在所有 title 中出现次数相同），
+        // 归一化后应该都为 1.0，因此：
+        // doc-a: final_score = 0.7 * 1.0 + 0.3 * 1.0 = 1.0
+        // doc-c: final_score = 0.7 * 1.0 + 0.3 * 0.8535 = 0.7 + 0.256 = 0.956
+        // doc-b: final_score = 0.7 * 1.0 + 0.3 * 0.5 = 0.7 + 0.15 = 0.85
+        assert!(
+            (result_a.final_score - 1.0).abs() < 0.01,
+            "doc-a final_score should be ~1.0, got {}",
+            result_a.final_score
+        );
+        assert!(
+            (result_c.final_score - 0.956).abs() < 0.01,
+            "doc-c final_score should be ~0.956, got {}",
+            result_c.final_score
+        );
+        assert!(
+            (result_b.final_score - 0.85).abs() < 0.01,
+            "doc-b final_score should be ~0.85, got {}",
+            result_b.final_score
+        );
+
+        // 验证排序: doc-a > doc-c > doc-b
+        assert_eq!(results[0].record.id, "doc-a", "doc-a should be first");
+        assert_eq!(results[1].record.id, "doc-c", "doc-c should be second");
+        assert_eq!(results[2].record.id, "doc-b", "doc-b should be third");
     }
 }

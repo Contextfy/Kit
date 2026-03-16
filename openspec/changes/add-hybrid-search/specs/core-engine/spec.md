@@ -60,9 +60,8 @@ The core engine SHALL provide hybrid search that combines BM25 keyword matching 
 #### Scenario: 排序稳定性和 NaN 处理
 
 - **当**系统对结果排序时
-- **则**系统使用 `partial_cmp` 安全比较浮点数分数
-- **并且**系统将 `NaN` 分数视为最小值（排在最后）
-- **并且**系统在分数相同时使用 `record.id` 作为确定性 tie-breaker
+- **则**系统的比较器对浮点数实现了全序排序（Total Ordering），将 NaN 分数归一化为最小值使其排在最后
+- **并且**系统在分数相同时确定性地使用 record.id 打破平局（Tie-breaker）
 - **并且**系统确保相同输入产生相同排序结果（可重现性）
 
 #### Scenario: 边界条件处理

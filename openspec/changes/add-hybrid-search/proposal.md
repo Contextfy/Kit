@@ -9,7 +9,7 @@
 - 在 `packages/core/src/storage/mod.rs` 中定义 `BriefWithScore` 结构体，包含 `record`、`bm25_score`、`vector_score`、`final_score` 字段
 - 实现 `KnowledgeStore::hybrid_search(&self, query: &str, top_k: usize) -> Result<Vec<BriefWithScore>>` 方法
 - 多路召回：分别调用 BM25 `search`（获取 Top-N）和 `vector_search`（获取 Top-N），N 取 `top_k * 2` 保证召回率
-- BM25 分数归一化：使用 Min-Max 归一化 `(score - min) / (max - min)`，处理除零情况（max == min 时统一取 1.0）
+- BM25 分数归一化：使用 Min-Max 归一化 `(score - min) / (max - min)`，处理除零情况（当 abs(max - min) < f32::EPSILON 时，如果 bm25_score > 0 则取 1.0，否则取 0.0）
 - 结果交并集：使用 `HashMap<String, BriefWithScore>` 按文档 ID 合并两路结果，缺失分数设为 0.0
 - 加权融合：按 `final_score = 0.7 * normalized_bm25 + 0.3 * vector_score` 计算最终得分
 - 安全排序：使用 `partial_cmp` 结合 `record.id` 打破平局，降序排序后截取 `top_k`

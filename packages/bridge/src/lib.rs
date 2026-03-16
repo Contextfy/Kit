@@ -10,12 +10,15 @@
 //! const results = await kit.scout('query');
 //! ```
 
+use contextfy_core::retriever::Retriever;
+use contextfy_core::storage::KnowledgeStore;
 use napi_derive::napi;
+use std::sync::Arc;
 
 /// Contextfy API module exported to Node.js.
 #[napi]
 pub mod contextfy {
-    use super::{Brief, Details};
+    use super::{Arc, Brief, Details, KnowledgeStore, Retriever};
 
     /// Main API wrapper for Contextfy functionality.
     ///
@@ -30,7 +33,10 @@ pub mod contextfy {
     /// ```
     #[napi]
     pub struct ContextfyKit {
-        _private: (),
+        retriever: Retriever<'static>,
+        // Store must be kept alive since retriever holds a reference to it
+        // We use Arc to allow multiple references and 'static lifetime since we own the data
+        _store: Arc<KnowledgeStore>,
     }
 
     impl Default for ContextfyKit {
@@ -43,6 +49,9 @@ pub mod contextfy {
     impl ContextfyKit {
         /// Creates a new `ContextfyKit` instance.
         ///
+        /// This initializes the knowledge store with the default data directory (`.contextfy/data`).
+        /// The embedding model is disabled by default for faster initialization.
+        ///
         /// # Example
         ///
         /// ```javascript
@@ -50,10 +59,37 @@ pub mod contextfy {
         /// ```
         #[napi(constructor)]
         pub fn new() -> Self {
-            Self { _private: () }
+            // Initialize the KnowledgeStore with default path
+            // Note: In a production environment, this should be configurable
+            // and properly handle async initialization
+            let rt = tokio::runtime::Runtime::new()
+                .expect("Failed to create Tokio runtime");
+
+            let store = rt.block_on(async {
+                KnowledgeStore::new(".contextfy/data", None)
+                    .await
+                    .expect("Failed to initialize KnowledgeStore")
+            });
+
+            let store_arc = Arc::new(store);
+
+            // SAFETY: We extend the lifetime to 'static since we own the Arc
+            // and the retriever will be stored alongside the Arc
+            let retriever = unsafe {
+                std::mem::transmute::<Retriever<'_>, Retriever<'static>>(
+                    Retriever::new(&*store_arc)
+                )
+            };
+
+            Self {
+                retriever,
+                _store: store_arc,
+            }
         }
 
         /// Searches the knowledge base for matching records.
+        ///
+        /// This performs a BM25 keyword search over the knowledge base.
         ///
         /// # Arguments
         ///
@@ -67,11 +103,26 @@ pub mod contextfy {
         ///
         /// ```javascript
         /// const results = await kit.scout('Rust');
-        /// console.log(results); // [{ id, title, summary }, ...]
+        /// console.log(results); // [{ id, title, summary, score }, ...]
         /// ```
         #[napi]
-        pub async fn scout(&self, _query: String) -> napi::Result<Vec<Brief>> {
-            Err(napi::Error::from_reason("scout not implemented"))
+        pub async fn scout(&self, query: String) -> napi::Result<Vec<Brief>> {
+            self.retriever
+                .scout(&query)
+                .await
+                .map(|core_briefs| {
+                    core_briefs
+                        .into_iter()
+                        .map(|core_brief| Brief {
+                            id: core_brief.id,
+                            title: core_brief.title,
+                            parent_doc_title: core_brief.parent_doc_title,
+                            summary: core_brief.summary,
+                            score: core_brief.score as f64, // Convert f32 to f64 for NAPI
+                        })
+                        .collect()
+                })
+                .map_err(|e| napi::Error::from_reason(format!("Search failed: {}", e)))
         }
 
         /// Retrieves detailed information about a specific record.
@@ -92,11 +143,24 @@ pub mod contextfy {
         /// ```
         #[napi]
         pub async fn inspect(&self, id: String) -> napi::Result<Details> {
-            Ok(Details {
-                id,
-                title: "Stub Details".to_string(),
-                content: "This is stub content from the bridge layer".to_string(),
-            })
+            self.retriever
+                .inspect(&id)
+                .await
+                .map(|details_opt| {
+                    match details_opt {
+                        Some(details) => Details {
+                            id: details.id,
+                            title: details.title,
+                            content: details.content,
+                        },
+                        None => Details {
+                            id,
+                            title: String::new(),
+                            content: String::new(),
+                        },
+                    }
+                })
+                .map_err(|e| napi::Error::from_reason(format!("Failed to retrieve record: {}", e)))
         }
     }
 }

@@ -85,7 +85,23 @@ impl<'a> Retriever<'a> {
     ///
     /// 返回匹配的记录列表（包含简要信息和 BM25 相关性分数）。
     pub async fn scout(&self, query: &str) -> Result<Vec<Brief>> {
-        let records = self.store.search(query, DEFAULT_SEARCH_LIMIT).await?;
+        self.scout_with_limit(query, DEFAULT_SEARCH_LIMIT).await
+    }
+
+    /// 搜索知识记录（返回简要信息，带自定义限制）
+    ///
+    /// 根据查询字符串搜索标题和摘要中包含关键词的记录，允许自定义返回结果数量限制。
+    ///
+    /// # 参数
+    ///
+    /// * `query` - 搜索关键词（不区分大小写）
+    /// * `limit` - 返回结果的最大数量
+    ///
+    /// # 返回值
+    ///
+    /// 返回匹配的记录列表（包含简要信息和 BM25 相关性分数）。
+    pub async fn scout_with_limit(&self, query: &str, limit: usize) -> Result<Vec<Brief>> {
+        let records = self.store.search(query, limit).await?;
         Ok(records
             .into_iter()
             .map(|(r, score)| Brief {
