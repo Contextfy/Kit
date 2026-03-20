@@ -1,9 +1,8 @@
 use anyhow::Result;
-use contextfy_core::{parse_markdown, EmbeddingModel, KnowledgeStore};
+use contextfy_core::{parse_markdown, SearchEngine};
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 
 /// 默认文档目录路径
 const DEFAULT_DOCS_PATH: &str = "docs/examples";
@@ -44,32 +43,13 @@ fn default_docs_path() -> String {
 /// # }
 /// ```
 pub async fn build() -> Result<()> {
-    // 初始化 EmbeddingModel（如果失败则优雅降级为 None，文档仍可通过 BM25 检索）
-    // 使用 spawn_blocking 避免阻塞异步 worker 线程
-    let embedding_model = match tokio::task::spawn_blocking(EmbeddingModel::new).await {
-        Ok(Ok(model)) => {
-            println!("✓ Embedding model initialized successfully");
-            Some(Arc::new(model))
-        }
-        Ok(Err(e)) => {
-            eprintln!(
-                "Warning: Failed to initialize embedding model: {}. \
-                Vector embeddings will be disabled (graceful degradation - documents still searchable via BM25).",
-                e
-            );
-            None
-        }
-        Err(e) => {
-            eprintln!(
-                "Warning: Embedding model initialization task panicked: {}. \
-                Vector embeddings will be disabled (graceful degradation - documents still searchable via BM25).",
-                e
-            );
-            None
-        }
-    };
-
-    let store = KnowledgeStore::new(".contextfy/data", embedding_model).await?;
+    // 初始化 SearchEngine
+    let engine = SearchEngine::new(
+        Some(std::path::Path::new(".contextfy/data/bm25_index")),
+        ".contextfy/data/lancedb",
+        "knowledge",
+    )
+    .await?;
 
     // 读取配置文件
     let config_path = Path::new("contextfy.json");
@@ -104,16 +84,36 @@ pub async fn build() -> Result<()> {
 
             match parse_markdown(&file_path) {
                 Ok(doc) => {
-                    let ids = store.add(&doc).await?;
-                    documents_count += 1;
-                    sections_count += doc.sections.len();
+                    // Add document sections to SearchEngine
                     if doc.sections.is_empty() {
-                        println!("  → Stored: {} (ID: {})", doc.title, ids[0]);
-                    } else {
-                        println!("  → Stored: {} ({} slices)", doc.title, ids.len());
-                        for (i, id) in ids.iter().enumerate() {
-                            println!("      [{}] Slice ID: {}", i + 1, id);
+                        // No sections, add the whole document as one entry
+                        let id = format!("{}-0", doc.title.replace(' ', "-"));
+                        if let Err(e) = engine.add(&id, &doc.title, &doc.summary[..doc.summary.len().min(200)], &doc.content).await {
+                            eprintln!("  ✗ Failed to add {}: {}", id, e);
+                            parse_errors += 1;
+                        } else {
+                            println!("  → Stored: {} (ID: {})", doc.title, id);
+                            documents_count += 1;
+                            sections_count += 1;
                         }
+                    } else {
+                        // Add each section as a separate entry
+                        for (i, section) in doc.sections.iter().enumerate() {
+                            let id = format!("{}-{}", doc.title.replace(' ', "-"), i);
+                            if let Err(e) = engine.add(
+                                &id,
+                                &section.section_title,
+                                &section.summary[..section.summary.len().min(200)],
+                                &section.content
+                            ).await {
+                                eprintln!("  ✗ Failed to add section {}: {}", id, e);
+                                parse_errors += 1;
+                            } else {
+                                documents_count += 1;
+                            }
+                        }
+                        sections_count += doc.sections.len();
+                        println!("  → Stored: {} ({} slices)", doc.title, doc.sections.len());
                     }
                 }
                 Err(e) => {

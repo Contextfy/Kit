@@ -1,6 +1,21 @@
 //! Tantivy 全文搜索模块
 //!
+//! **[DEPRECATED]** 此模块已弃用。请使用 `slices::bm25` 和 `slices::hybrid` 模块代替。
+//!
 //! 此模块提供基于 Tantivy 的全文搜索索引功能，支持 BM25 关键词搜索和中文分词。
+//!
+//! # 迁移指南
+//!
+//! 旧代码：
+//! ```ignore
+//! use contextfy_core::search::{Indexer, Searcher};
+//! ```
+//!
+//! 新代码：
+//! ```ignore
+//! use contextfy_core::slices::bm25::TantivyBm25Store;
+//! use contextfy_core::slices::hybrid::HybridOrchestrator;
+//! ```
 
 use crate::storage::KnowledgeRecord;
 use anyhow::{Context, Result};

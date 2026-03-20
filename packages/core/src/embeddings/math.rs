@@ -51,24 +51,22 @@
 /// ```rust
 /// use contextfy_core::embeddings::math::cosine_similarity;
 ///
-/// fn main() {
-///     // 相同向量
-///     let a = vec![1.0, 2.0, 3.0];
-///     let sim = cosine_similarity(&a, &a);
-///     assert!((sim - 1.0).abs() < 1e-6);
+/// // 相同向量
+/// let a = vec![1.0, 2.0, 3.0];
+/// let sim = cosine_similarity(&a, &a);
+/// assert!((sim - 1.0).abs() < 1e-6);
 ///
-///     // 正交向量
-///     let b = vec![0.0, 1.0];
-///     let c = vec![1.0, 0.0];
-///     let sim = cosine_similarity(&b, &c);
-///     assert!((sim - 0.5).abs() < 1e-6);
+/// // 正交向量
+/// let b = vec![0.0, 1.0];
+/// let c = vec![1.0, 0.0];
+/// let sim = cosine_similarity(&b, &c);
+/// assert!((sim - 0.5).abs() < 1e-6);
 ///
-///     // 相反向量
-///     let d = vec![1.0, 1.0];
-///     let e = vec![-1.0, -1.0];
-///     let sim = cosine_similarity(&d, &e);
-///     assert!((sim - 0.0).abs() < 1e-6);
-/// }
+/// // 相反向量
+/// let d = vec![1.0, 1.0];
+/// let e = vec![-1.0, -1.0];
+/// let sim = cosine_similarity(&d, &e);
+/// assert!((sim - 0.0).abs() < 1e-6);
 /// ```
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     // 长度检查：如果任一向量为空或长度不一致，返回 0.0
@@ -121,6 +119,7 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::FRAC_1_SQRT_2;
 
     #[test]
     fn test_identical_vectors() {
@@ -226,7 +225,7 @@ mod tests {
         let b = vec![1.0, 1.0, 0.0];
         let sim = cosine_similarity(&a, &b);
         // cos(45°) = 0.707..., 归一化后为 (0.707 + 1) / 2 = 0.8535...
-        let expected = (0.70710678_f32 + 1.0) / 2.0;
+        let expected = (FRAC_1_SQRT_2 + 1.0) / 2.0;
         assert!(
             (sim - expected).abs() < 1e-4,
             "部分相关向量相似度应约为 {}，实际为 {}",
@@ -260,7 +259,7 @@ mod tests {
         for (a, b) in test_cases {
             let sim = cosine_similarity(&a, &b);
             assert!(
-                sim >= 0.0 && sim <= 1.0,
+                (0.0..=1.0).contains(&sim),
                 "向量 {:?} 和 {:?} 的相似度 {} 不在 [0,1] 范围内",
                 a,
                 b,
@@ -277,6 +276,6 @@ mod tests {
         let b = vec![1000.0, 1e-10];
         let sim = cosine_similarity(&a, &b);
         // 由于 clamp，结果必须在 [0, 1] 范围内
-        assert!(sim >= 0.0 && sim <= 1.0);
+        assert!((0.0..=1.0).contains(&sim));
     }
 }

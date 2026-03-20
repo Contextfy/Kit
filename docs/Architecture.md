@@ -166,23 +166,28 @@ sequenceDiagram
 我们使用单一宽表设计，通过 Column Projection 优化读取性能。
 
 ```rust
-// Rust Struct 映射
+// Arrow Schema 定义 (实际 LanceDB 表结构)
 struct KnowledgeRecord {
-    id: String,             // UUID
-    doc_path: String,       // 原始文件路径 (用于追溯)
+    id: String,             // UUID (非空)
+    source_path: String,    // 原始文件路径 (用于追溯，非空)
 
     // Scout 阶段读取的列
-    title: String,
-    summary: String,        // 纯文本摘要
-    tags: Vec<String>,      // 关键词/API名
+    title: String,          // 记录标题 (非空)
+    summary: String,        // 纯文本摘要 (非空)
+    keywords: String,       // JSON 序列化的关键词数组 (可空)
 
     // Inspect 阶段读取的列 (通常只在 Scout 命中后加载)
-    content: String,        // 完整 Markdown/代码
+    content: String,        // 完整 Markdown/代码 (非空)
 
     // 索引列
-    vector: Vec<f32>,       // Embedding(title + summary)
+    vector: FixedSizeList(Float32, 384),  // Embedding 向量 (非空，384 维)
 }
 ```
+
+**字段类型说明：**
+- `vector` 字段为 Arrow 的 `FixedSizeList(Float32, 384)`，确保向量维度固定
+- `keywords` 字段存储 JSON 序列化的字符串（如 `["rust", "async"]`），便于全文索引
+- 所有字段除 `keywords` 外均不可为空
 
 ---
 
