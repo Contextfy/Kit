@@ -21,6 +21,7 @@ use super::trait_::VectorStoreTrait;
 /// Defines how vector similarity is calculated. Different metrics
 /// have different ranges and normalization requirements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Reserved for future metric selection feature
 pub enum DistanceMetric {
     /// Cosine distance (range: [0.0, 2.0])
     /// 0.0 = identical vectors, 2.0 = orthogonal vectors
