@@ -24,6 +24,12 @@ use super::trait_::{Bm25StoreTrait, Bm25Result};
 use super::schema::{FIELD_ID, FIELD_TITLE, FIELD_SUMMARY, FIELD_CONTENT, FIELD_KEYWORDS};
 use super::index::{create_bm25_index, create_index_reader};
 
+/// Maximum BM25 score for normalization
+///
+/// Tantivy returns BM25 scores which can be any positive value.
+/// We normalize to [0.0, 1.0] range by dividing by this constant.
+const BM25_MAX_SCORE: f32 = 20.0;
+
 /// Tantivy BM25 store implementation
 ///
 /// This struct holds the Tantivy index and implements Bm25StoreTrait.
@@ -86,7 +92,7 @@ impl TantivyBm25Store {
     ///
     /// Returns a new `TantivyBm25Store` instance.
     #[doc(hidden)]
-    pub async fn from_directory(directory: &std::path::Path) -> AnyhowResult<Self> {
+    pub fn from_directory(directory: &std::path::Path) -> AnyhowResult<Self> {
         let index = create_bm25_index(Some(directory))?;
         Self::new(index)
     }
@@ -108,7 +114,7 @@ impl TantivyBm25Store {
     fn normalize_score(bm25_score: f32) -> Score {
         // BM25 scores can vary widely, so we use a simple clamp for now
         // In production, you might want to use percentile-based normalization
-        let normalized = (bm25_score / 20.0).clamp(0.0, 1.0);
+        let normalized = (bm25_score / BM25_MAX_SCORE).clamp(0.0, 1.0);
         Score::new(normalized as f64)
     }
 }
@@ -413,6 +419,86 @@ impl Bm25StoreTrait for TantivyBm25Store {
 
         Ok(get_result)
     }
+
+    /// Get multiple documents by IDs (batch version)
+    ///
+    /// More efficient than calling get_by_id multiple times as it batches queries.
+    async fn get_by_ids(&self, ids: &[String]) -> Result<Vec<Option<Bm25Result>>, AppError> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let ids = ids.to_vec();
+        let reader_clone = Arc::clone(&self.reader);
+        let index_clone = self.index.clone();
+
+        // Use spawn_blocking to avoid blocking Tokio runtime
+        let get_results = tokio::task::spawn_blocking(move || {
+            // Reload reader to get latest commits
+            reader_clone.reload()
+                .context("Failed to reload index reader")?;
+
+            // Get searcher snapshot
+            let searcher = reader_clone.searcher();
+
+            // Get schema
+            let schema = index_clone.schema();
+
+            // Get field references
+            let id_field = schema.get_field(FIELD_ID)
+                .context("Missing id field in schema")?;
+            let title_field = schema.get_field(FIELD_TITLE)
+                .context("Missing title field in schema")?;
+            let summary_field = schema.get_field(FIELD_SUMMARY)
+                .context("Missing summary field in schema")?;
+            let content_field = schema.get_field(FIELD_CONTENT)
+                .context("Missing content field in schema")?;
+
+            let mut results = Vec::with_capacity(ids.len());
+
+            // Batch query: use BooleanQuery to match multiple IDs
+            let mut terms: Vec<Box<dyn tantivy::query::Query>> = Vec::new();
+            for id in &ids {
+                let term = tantivy::Term::from_field_text(id_field, id);
+                terms.push(Box::new(tantivy::query::TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic)));
+            }
+
+            // Use OR query to match any of the IDs
+            let boolean_query = tantivy::query::BooleanQuery::union(terms);
+            let top_docs = searcher.search(&boolean_query, &tantivy::collector::TopDocs::with_limit(ids.len()))
+                .context("Failed to execute batch search")?;
+
+            // Build a map of ID -> document for quick lookup
+            let mut doc_map: std::collections::HashMap<String, Bm25Result> = std::collections::HashMap::new();
+
+            for (_score, doc_address) in top_docs {
+                let retrieved_doc = searcher.doc(doc_address)
+                    .context("Failed to retrieve document")?;
+
+                let doc_id = Self::extract_text_value(&retrieved_doc, id_field);
+                let title = Self::extract_text_value(&retrieved_doc, title_field);
+                let summary = Self::extract_text_value(&retrieved_doc, summary_field);
+                let content = Self::extract_text_value(&retrieved_doc, content_field);
+
+                doc_map.insert(doc_id.clone(), Bm25Result::with_content(doc_id, title, summary, content, Score::new(1.0)));
+            }
+
+            // Return results in the same order as input IDs
+            for id in &ids {
+                results.push(doc_map.get(id).cloned());
+            }
+
+            Ok::<Vec<Option<Bm25Result>>, anyhow::Error>(results)
+        })
+        .await
+        .map_err(|e| AppError::Infra(InfraError::database(
+            "get_by_ids task failed",
+            Some::<anyhow::Error>(e.into()),
+        )))?
+        .map_err(|e| AppError::Infra(InfraError::database("get_by_ids failed", Some(e))))?;
+
+        Ok(get_results)
+    }
 }
 
 #[cfg(test)]
@@ -423,7 +509,6 @@ mod tests {
     async fn create_test_store() -> (TantivyBm25Store, tempfile::TempDir) {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let store = TantivyBm25Store::from_directory(temp_dir.path())
-            .await
             .expect("Failed to create store");
 
         (store, temp_dir)
@@ -518,6 +603,48 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), true);
+    }
+
+    #[tokio::test]
+    async fn test_get_by_id_success() {
+        let (store, _temp_dir) = create_test_store().await;
+
+        // Add a document
+        store.add(
+            "doc-1",
+            "Rust Programming",
+            "A comprehensive guide to Rust",
+            "Rust is a systems programming language focused on safety and performance",
+        )
+        .await
+        .expect("Failed to add document");
+
+        // Get the document by ID
+        let result = store.get_by_id("doc-1").await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert!(result.is_some());
+
+        let doc = result.unwrap();
+        assert_eq!(doc.id, "doc-1");
+        assert_eq!(doc.title, "Rust Programming");
+        assert_eq!(doc.summary, "A comprehensive guide to Rust");
+        assert_eq!(
+            doc.content,
+            Some("Rust is a systems programming language focused on safety and performance".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_by_id_not_found() {
+        let (store, _temp_dir) = create_test_store().await;
+
+        // Try to get a non-existent document
+        let result = store.get_by_id("non-existent-id").await;
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
     }
 
     #[test]

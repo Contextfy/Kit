@@ -16,6 +16,25 @@ use crate::kernel::errors::{AppError, InfraError};
 
 use super::trait_::VectorStoreTrait;
 
+/// Distance metric types supported by the vector store
+///
+/// Defines how vector similarity is calculated. Different metrics
+/// have different ranges and normalization requirements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DistanceMetric {
+    /// Cosine distance (range: [0.0, 2.0])
+    /// 0.0 = identical vectors, 2.0 = orthogonal vectors
+    Cosine,
+
+    /// Euclidean/L2 distance (range: [0.0, +infinity))
+    /// 0.0 = identical vectors, higher values = more different
+    L2,
+
+    /// Dot product (range: [-infinity, +infinity))
+    /// Higher values = more similar, but unbounded and sign-dependent
+    Dot,
+}
+
 /// LanceDB vector store implementation
 ///
 /// This struct holds the LanceDB connection and implements VectorStoreTrait.
@@ -67,16 +86,29 @@ impl LanceDbStore {
     /// # Parameters
     ///
     /// * `distance` - Raw distance from LanceDB
+    /// * `metric` - The distance metric type to use for normalization
     ///
     /// # Returns
     ///
     /// Normalized score in [0.0, 1.0] where 1.0 is best match.
     #[allow(dead_code)]
-    fn normalize_score(distance: f32) -> Score {
-        // For cosine distance (range [0.0, 2.0]): score = 1 - distance/2
-        // For L2 distance: score = 1 / (1 + distance)
-        // Default: assume cosine distance
-        let normalized = (1.0 - (distance / 2.0)).clamp(0.0, 1.0);
+    fn normalize_score(distance: f32, metric: DistanceMetric) -> Score {
+        let normalized = match metric {
+            // Cosine distance (range [0.0, 2.0]): score = 1 - distance/2
+            DistanceMetric::Cosine => (1.0 - (distance / 2.0)).clamp(0.0, 1.0),
+
+            // L2 distance (range [0.0, +infinity)): score = 1 / (1 + distance)
+            DistanceMetric::L2 => (1.0 / (1.0 + distance)).clamp(0.0, 1.0),
+
+            // Dot product (range [-infinity, +infinity))
+            // Use sigmoid-like normalization: score = 1 / (1 + exp(-distance))
+            DistanceMetric::Dot => {
+                // Sigmoid function to map unbounded dot product to [0, 1]
+                let sigmoid = 1.0 / (1.0 + (-distance as f64).exp());
+                sigmoid as f32
+            }
+        };
+
         Score::new(normalized as f64)
     }
 }
@@ -167,6 +199,31 @@ impl VectorStoreTrait for LanceDbStore {
         // Phase 2: Implement actual deletion:
         // let table = self.get_table().await
         //     .map_err(|e| InfraError::database("delete failed", Some(e)))?;
+        //
+        // SECURITY WARNING: The following line is vulnerable to SQL injection!
+        // table.delete(&format!("id == '{}'", id))
+        //
+        // DO NOT USE string formatting for query parameters. An attacker could inject
+        // malicious SQL by crafting an id like: "doc1' OR '1'='1"
+        //
+        // Instead, use parameter binding or proper escaping. LanceDB supports safer
+        // alternatives such as:
+        //
+        // Option 1: Use LanceDB's builder API with proper parameter binding (preferred):
+        // table.delete()
+        //     .only_if("id == $1")
+        //     .execute(&[id])  // Parameter binding prevents injection
+        //
+        // Option 2: If using raw filter strings, properly escape the input:
+        // let escaped_id = id.replace('\\', "\\\\").replace('\'', "\\'");
+        // table.delete(&format!("id == '{}'", escaped_id))
+        //
+        // Option 3: Use LanceDB's expression builder if available:
+        // use lancedb::dsl::col;
+        // table.delete(col("id").eq(lancedb::Literal::new(id)))
+        //
+        // Reference: https://lancedb.github.io/lancedb/security/
+        //
         // table.delete(&format!("id == '{}'", id))
         //     .execute()
         //     .await
@@ -289,22 +346,57 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_score() {
+    fn test_normalize_score_cosine() {
         // Test cosine distance normalization
         // Cosine distance range: [0.0, 2.0]
         // 0.0 distance → 1.0 score (perfect match)
-        assert_eq!(LanceDbStore::normalize_score(0.0).value(), 1.0);
+        assert_eq!(LanceDbStore::normalize_score(0.0, DistanceMetric::Cosine).value(), 1.0);
 
         // 1.0 distance → 0.5 score
-        assert_eq!(LanceDbStore::normalize_score(1.0).value(), 0.5);
+        assert_eq!(LanceDbStore::normalize_score(1.0, DistanceMetric::Cosine).value(), 0.5);
 
         // 2.0 distance → 0.0 score (worst match)
-        assert_eq!(LanceDbStore::normalize_score(2.0).value(), 0.0);
+        assert_eq!(LanceDbStore::normalize_score(2.0, DistanceMetric::Cosine).value(), 0.0);
 
         // Clamping test: value > 2.0 should be clamped to 0.0
-        assert_eq!(LanceDbStore::normalize_score(3.0).value(), 0.0);
+        assert_eq!(LanceDbStore::normalize_score(3.0, DistanceMetric::Cosine).value(), 0.0);
 
         // Clamping test: value < 0.0 should be clamped to 1.0
-        assert_eq!(LanceDbStore::normalize_score(-0.5).value(), 1.0);
+        assert_eq!(LanceDbStore::normalize_score(-0.5, DistanceMetric::Cosine).value(), 1.0);
+    }
+
+    #[test]
+    fn test_normalize_score_l2() {
+        // Test L2 distance normalization
+        // L2 distance range: [0.0, +infinity)
+        // 0.0 distance → 1.0 score (perfect match)
+        assert!((LanceDbStore::normalize_score(0.0, DistanceMetric::L2).value() - 1.0).abs() < f64::EPSILON);
+
+        // 1.0 distance → 0.5 score
+        assert!((LanceDbStore::normalize_score(1.0, DistanceMetric::L2).value() - 0.5).abs() < f64::EPSILON);
+
+        // Large distance → small score
+        assert!(LanceDbStore::normalize_score(10.0, DistanceMetric::L2).value() < 0.1);
+
+        // Very large distance → very small score
+        assert!(LanceDbStore::normalize_score(100.0, DistanceMetric::L2).value() < 0.01);
+    }
+
+    #[test]
+    fn test_normalize_score_dot() {
+        // Test dot product normalization (sigmoid)
+        // Dot product range: [-infinity, +infinity)
+
+        // High positive dot product → score near 1.0
+        let score_high = LanceDbStore::normalize_score(5.0, DistanceMetric::Dot).value();
+        assert!(score_high > 0.95);
+
+        // Dot product of 0 → score of 0.5
+        let score_zero = LanceDbStore::normalize_score(0.0, DistanceMetric::Dot).value();
+        assert!((score_zero - 0.5).abs() < 0.01);
+
+        // Negative dot product → score near 0.0
+        let score_negative = LanceDbStore::normalize_score(-5.0, DistanceMetric::Dot).value();
+        assert!(score_negative < 0.05);
     }
 }

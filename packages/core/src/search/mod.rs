@@ -144,6 +144,7 @@ pub struct SearchResult {
 /// 索引写入器
 ///
 /// 负责将文档添加到 Tantivy 索引并提交更改。
+#[deprecated(since = "0.2.0", note = "Use SearchEngine or BridgeApi instead")]
 pub struct Indexer {
     #[allow(dead_code)]
     index: Index,
@@ -248,6 +249,7 @@ impl Indexer {
 /// 搜索器
 ///
 /// 负责执行 BM25 全文搜索查询。
+#[deprecated(since = "0.2.0", note = "Use SearchEngine or BridgeApi instead")]
 pub struct Searcher {
     #[allow(dead_code)]
     index: Index,

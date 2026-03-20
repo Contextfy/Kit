@@ -39,6 +39,11 @@ pub async fn scout(query: String) -> Result<()> {
                 println!("No results found.");
             } else {
                 println!("\nFound {} result(s):", hits.len());
+
+                // Batch fetch all document details in one call (more efficient)
+                let ids: Vec<String> = hits.iter().map(|h| h.id.clone()).collect();
+                let docs_result = engine.get_documents(&ids).await;
+
                 for (i, hit) in hits.iter().enumerate() {
                     // 根据分数使用不同颜色高亮
                     let score_display = format!("{:.2}", hit.score.value());
@@ -57,14 +62,15 @@ pub async fn scout(query: String) -> Result<()> {
                         hit.id
                     );
 
-                    // Try to get document details for title and summary
-                    match engine.get_document(&hit.id).await {
-                        Ok(Some(doc)) => {
-                            println!("    Title: {}", doc.title);
-                            println!("    Summary: {}", doc.summary);
-                        }
-                        Ok(None) => {
-                            println!("    (Document details not available)");
+                    // Try to get document details from batch result
+                    match &docs_result {
+                        Ok(docs) => {
+                            if let Some(Some(doc)) = docs.get(i) {
+                                println!("    Title: {}", doc.title);
+                                println!("    Summary: {}", doc.summary);
+                            } else {
+                                println!("    (Document details not available)");
+                            }
                         }
                         Err(_) => {
                             println!("    (Failed to load document details)");

@@ -76,8 +76,7 @@ pub(crate) fn knowledge_record_schema() -> Schema {
 ///
 /// * `Ok(())` - Schema is valid
 /// * `Err(String)` - Schema validation failed with descriptive message
-#[allow(dead_code)]
-pub(crate) fn validate_knowledge_schema(schema: &Schema) -> Result<(), String> {
+pub fn validate_knowledge_schema(schema: &Schema) -> Result<(), String> {
     let expected = knowledge_record_schema();
 
     // Check field count
@@ -89,31 +88,47 @@ pub(crate) fn validate_knowledge_schema(schema: &Schema) -> Result<(), String> {
         ));
     }
 
-    // Validate vector field specifically
-    let vector_field = schema
-        .field_with_name("vector")
-        .map_err(|e| format!("Missing 'vector' field: {}", e))?;
+    // Validate each field comprehensively
+    for (idx, expected_field) in expected.fields().iter().enumerate() {
+        // Get actual field by index (first ensure we have enough fields)
+        let actual_field = schema
+            .fields()
+            .get(idx)
+            .ok_or_else(|| {
+                format!(
+                    "Missing field at index {}: '{}'",
+                    idx, expected_field.name()
+                )
+            })?;
 
-    match vector_field.data_type() {
-        DataType::FixedSizeList(field, size) => {
-            if *size != VECTOR_DIM {
-                return Err(format!(
-                    "Vector dimension mismatch: expected {}, got {}",
-                    VECTOR_DIM, size
-                ));
-            }
-            if field.data_type() != &DataType::Float32 {
-                return Err(format!(
-                    "Vector element type mismatch: expected Float32, got {:?}",
-                    field.data_type()
-                ));
-            }
-        }
-        _ => {
+        // Validate field name
+        if actual_field.name() != expected_field.name() {
             return Err(format!(
-                "Vector field is not FixedSizeList, got {:?}",
-                vector_field.data_type()
-            ))
+                "Field name mismatch at index {}: expected '{}', got '{}'",
+                idx,
+                expected_field.name(),
+                actual_field.name()
+            ));
+        }
+
+        // Validate data type
+        if actual_field.data_type() != expected_field.data_type() {
+            return Err(format!(
+                "Data type mismatch for field '{}': expected {:?}, got {:?}",
+                actual_field.name(),
+                expected_field.data_type(),
+                actual_field.data_type()
+            ));
+        }
+
+        // Validate nullable flag
+        if actual_field.is_nullable() != expected_field.is_nullable() {
+            return Err(format!(
+                "Nullable flag mismatch for field '{}': expected {}, got {}",
+                actual_field.name(),
+                expected_field.is_nullable(),
+                actual_field.is_nullable()
+            ));
         }
     }
 
@@ -180,25 +195,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_knowledge_schema_missing_vector() {
-        // Create a schema without vector field
-        // Note: Field count mismatch will be detected before missing vector
-        let wrong_schema = Schema::new(vec![
-            Field::new("id", DataType::Utf8, false),
-            Field::new("title", DataType::Utf8, false),
-            Field::new("summary", DataType::Utf8, false),
-            Field::new("content", DataType::Utf8, false),
-            Field::new("keywords", DataType::Utf8, true),
-            Field::new("source_path", DataType::Utf8, false),
-        ]);
-
-        let result = validate_knowledge_schema(&wrong_schema);
-        assert!(result.is_err());
-        // Field count is checked first, so we get that error
-        assert!(result.unwrap_err().contains("Field count mismatch"));
-    }
-
-    #[test]
     fn test_validate_knowledge_schema_wrong_vector_dimension() {
         // Create a schema with wrong vector dimension
         let wrong_schema = Schema::new(vec![
@@ -220,7 +216,9 @@ mod tests {
 
         let result = validate_knowledge_schema(&wrong_schema);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Vector dimension mismatch"));
+        let err = result.unwrap_err();
+        assert!(err.contains("Data type mismatch"));
+        assert!(err.contains("vector"));
     }
 
     #[test]
@@ -245,6 +243,115 @@ mod tests {
 
         let result = validate_knowledge_schema(&wrong_schema);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Vector element type mismatch"));
+        let err = result.unwrap_err();
+        assert!(err.contains("Data type mismatch"));
+        assert!(err.contains("vector"));
+    }
+
+    #[test]
+    fn test_validate_knowledge_schema_wrong_field_name() {
+        // Create a schema with wrong field name at index 1
+        let wrong_schema = Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("subject", DataType::Utf8, false), // Wrong name, should be "title"
+            Field::new("summary", DataType::Utf8, false),
+            Field::new("content", DataType::Utf8, false),
+            Field::new(
+                "vector",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Float32, true)),
+                    VECTOR_DIM,
+                ),
+                false,
+            ),
+            Field::new("keywords", DataType::Utf8, true),
+            Field::new("source_path", DataType::Utf8, false),
+        ]);
+
+        let result = validate_knowledge_schema(&wrong_schema);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Field name mismatch"));
+        assert!(err.contains("index 1"));
+        assert!(err.contains("expected 'title'"));
+        assert!(err.contains("got 'subject'"));
+    }
+
+    #[test]
+    fn test_validate_knowledge_schema_wrong_nullable_flag() {
+        // Create a schema with wrong nullable flag for id field
+        let wrong_schema = Schema::new(vec![
+            Field::new("id", DataType::Utf8, true), // Should be non-null
+            Field::new("title", DataType::Utf8, false),
+            Field::new("summary", DataType::Utf8, false),
+            Field::new("content", DataType::Utf8, false),
+            Field::new(
+                "vector",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Float32, true)),
+                    VECTOR_DIM,
+                ),
+                false,
+            ),
+            Field::new("keywords", DataType::Utf8, true),
+            Field::new("source_path", DataType::Utf8, false),
+        ]);
+
+        let result = validate_knowledge_schema(&wrong_schema);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Nullable flag mismatch"));
+        assert!(err.contains("id"));
+    }
+
+    #[test]
+    fn test_validate_knowledge_schema_wrong_data_type() {
+        // Create a schema with wrong data type for title field
+        let wrong_schema = Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("title", DataType::Int64, false), // Wrong type, should be Utf8
+            Field::new("summary", DataType::Utf8, false),
+            Field::new("content", DataType::Utf8, false),
+            Field::new(
+                "vector",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Float32, true)),
+                    VECTOR_DIM,
+                ),
+                false,
+            ),
+            Field::new("keywords", DataType::Utf8, true),
+            Field::new("source_path", DataType::Utf8, false),
+        ]);
+
+        let result = validate_knowledge_schema(&wrong_schema);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Data type mismatch"));
+        assert!(err.contains("title"));
+    }
+
+    #[test]
+    fn test_validate_knowledge_schema_all_fields_correct() {
+        // Create a schema that exactly matches the expected schema
+        let correct_schema = Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("title", DataType::Utf8, false),
+            Field::new("summary", DataType::Utf8, false),
+            Field::new("content", DataType::Utf8, false),
+            Field::new(
+                "vector",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new("item", DataType::Float32, true)),
+                    VECTOR_DIM,
+                ),
+                false,
+            ),
+            Field::new("keywords", DataType::Utf8, true),
+            Field::new("source_path", DataType::Utf8, false),
+        ]);
+
+        let result = validate_knowledge_schema(&correct_schema);
+        assert!(result.is_ok(), "Schema validation should succeed for correct schema");
     }
 }

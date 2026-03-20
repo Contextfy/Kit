@@ -153,6 +153,24 @@ pub trait Bm25StoreTrait: Send + Sync {
     /// * `Ok(None)` - Document not found
     /// * `Err(AppError)` - Retrieval failed
     async fn get_by_id(&self, id: &str) -> Result<Option<Bm25Result>, AppError>;
+
+    /// Get multiple documents by IDs
+    ///
+    /// # Parameters
+    ///
+    /// * `ids` - Slice of document IDs to retrieve
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(vec)` - Vector of options in the same order as input IDs.
+    ///   Each element is `Some(doc)` if found, `None` if not found.
+    /// * `Err(AppError)` - Retrieval failed
+    ///
+    /// # Performance
+    ///
+    /// This method should be more efficient than calling `get_by_id` multiple times,
+    /// as it can batch the database queries.
+    async fn get_by_ids(&self, ids: &[String]) -> Result<Vec<Option<Bm25Result>>, AppError>;
 }
 
 #[cfg(test)]
@@ -189,6 +207,15 @@ mod tests {
 
         async fn get_by_id(&self, _id: &str) -> Result<Option<Bm25Result>, AppError> {
             Ok(None)
+        }
+
+        async fn get_by_ids(&self, ids: &[String]) -> Result<Vec<Option<Bm25Result>>, AppError> {
+            // Default implementation: call get_by_id for each ID (inefficient but works)
+            let mut results = Vec::with_capacity(ids.len());
+            for id in ids {
+                results.push(self.get_by_id(id).await?);
+            }
+            Ok(results)
         }
     }
 
@@ -245,7 +272,7 @@ mod tests {
         let result = store.delete("id").await;
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 
     #[tokio::test]
@@ -254,6 +281,6 @@ mod tests {
         let result = store.health_check().await;
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 }

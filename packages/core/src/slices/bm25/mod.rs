@@ -6,7 +6,7 @@
 //!
 //! ## Architecture
 //!
-//! - **trait.rs**: Bm25StoreTrait - backend-agnostic interface
+//! - **trait_.rs**: Bm25StoreTrait - backend-agnostic interface
 //! - **schema.rs**: Tantivy schema definitions (private)
 //! - **index.rs**: Tantivy index creation and management (private)
 //! - **tantivy_impl.rs**: Concrete Tantivy implementation (private)

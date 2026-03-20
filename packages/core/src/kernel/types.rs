@@ -5,7 +5,6 @@
 //! no LanceDB vectors, no Tantivy documents).
 
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
 
 /// A normalized search query
 ///
@@ -106,12 +105,7 @@ impl Hit {
 impl PartialOrd for Hit {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         // Higher scores should be considered "greater" (better ranking)
-        match self.score.partial_cmp(&other.score) {
-            Some(Ordering::Greater) => Some(Ordering::Greater),  // self score > other score → self is better
-            Some(Ordering::Less) => Some(Ordering::Less),         // self score < other score → self is worse
-            Some(Ordering::Equal) => Some(Ordering::Equal),       // scores are equal → hits are equal
-            None => None,
-        }
+        self.score.partial_cmp(&other.score)
     }
 }
 
@@ -155,5 +149,28 @@ mod tests {
         let hit = Hit::with_raw_score("doc1", 0.85);
         assert_eq!(hit.id, "doc1");
         assert_eq!(hit.score.value(), 0.85);
+    }
+
+    #[test]
+    fn test_score_validation() {
+        // Valid scores
+        assert!(Score::new(0.5).is_relevant());
+        assert!(Score::new(1.0).is_relevant());
+
+        // Invalid scores
+        assert!(!Score::new(0.0).is_relevant());
+        assert!(!Score::new(-0.1).is_relevant());
+    }
+
+    #[test]
+    fn test_query_validation() {
+        // Valid queries
+        let q1 = Query::new("test", 10);
+        assert_eq!(q1.text, "test");
+        assert_eq!(q1.limit, 10);
+
+        // Empty query should be handled at domain level
+        let q2 = Query::new("", 10);
+        assert!(q2.text.is_empty());
     }
 }

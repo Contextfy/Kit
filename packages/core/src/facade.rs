@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use crate::slices::bm25::trait_::Bm25StoreTrait;
 use crate::slices::vector::VectorStoreTrait;
-use crate::slices::hybrid::HybridOrchestrator;
+use crate::slices::hybrid::{HybridOrchestrator, DeleteResult};
 
 // Private concrete implementations - invisible to external code
 use crate::slices::bm25::tantivy_impl::TantivyBm25Store;
@@ -170,7 +170,7 @@ impl SearchEngine {
         self.orchestrator
             .search(&query)
             .await
-            .map_err(|e| anyhow::anyhow!("Search failed: {}", e))
+            .context("Search failed")
     }
 
     /// Add a document to both BM25 and vector stores
@@ -185,7 +185,7 @@ impl SearchEngine {
         self.orchestrator
             .add(id, title, summary, content)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to add document: {}", e))
+            .context("Failed to add document")
     }
 
     /// Delete a document from both stores
@@ -196,12 +196,10 @@ impl SearchEngine {
     ///
     /// # Returns
     ///
-    /// Returns true if document was deleted from at least one store.
-    pub async fn delete(&self, id: &str) -> Result<bool> {
-        self.orchestrator
-            .delete(id)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to delete document: {}", e))
+    /// Returns detailed DeleteResult with individual backend results.
+    /// The caller can inspect which specific deletion (vector or BM25) failed.
+    pub async fn delete(&self, id: &str) -> DeleteResult {
+        self.orchestrator.delete(id).await
     }
 
     /// Check health of both backends
@@ -211,7 +209,7 @@ impl SearchEngine {
         self.orchestrator
             .health_check()
             .await
-            .map_err(|e| anyhow::anyhow!("Health check failed: {}", e))
+            .context("Health check failed")
     }
 
     /// Get internal orchestrator (for advanced usage)
@@ -242,7 +240,7 @@ impl SearchEngine {
             .bm25_store()
             .get_by_id(id)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to get document: {}", e))
+            .context("Failed to get document")
             .map(|opt_result| {
                 opt_result.map(|r| DocumentDetails {
                     id: r.id,
@@ -251,6 +249,39 @@ impl SearchEngine {
                     content: r.content.unwrap_or_default(),
                 })
             })
+    }
+
+    /// Get multiple documents by IDs (batch version)
+    ///
+    /// More efficient than calling get_document multiple times.
+    ///
+    /// # Parameters
+    ///
+    /// * `ids` - Slice of document IDs to retrieve
+    ///
+    /// # Returns
+    ///
+    /// Returns vector of document details in the same order as input IDs.
+    /// Each element is Some(doc) if found, None if not found.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if document retrieval fails.
+    pub async fn get_documents(&self, ids: &[String]) -> Result<Vec<Option<DocumentDetails>>> {
+        let results = self.orchestrator
+            .bm25_store()
+            .get_by_ids(ids)
+            .await
+            .context("Failed to get documents")?;
+
+        Ok(results.into_iter().map(|opt_result| {
+            opt_result.map(|r| DocumentDetails {
+                id: r.id,
+                title: r.title,
+                summary: r.summary,
+                content: r.content.unwrap_or_default(),
+            })
+        }).collect())
     }
 }
 

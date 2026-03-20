@@ -1,3 +1,5 @@
+# Implementation Tasks
+
 ## 1. Phase 1 - Kernel + Bridge Baseline
 
 - [x] 1.1 新建 `kernel/types` 并迁移稳定全局类型（`Query`、`Hit`、`Score`）

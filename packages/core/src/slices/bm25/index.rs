@@ -104,21 +104,18 @@ pub(crate) fn validate_existing_index(directory: &Path) -> Result<(), String> {
 /// Returns `Result<Index>` on success.
 #[allow(dead_code)]
 pub(crate) fn initialize_bm25_index(directory: &Path) -> Result<Index> {
-    // Try to open existing index
-    let index = match Index::open_in_dir(directory) {
+    match Index::open_in_dir(directory) {
         Ok(idx) => {
             // Validate schema
             validate_bm25_schema(&idx.schema())
                 .map_err(|e| anyhow::anyhow!("Existing index has incompatible schema: {}", e))?;
-            idx
+            Ok(idx)
         }
         Err(_) => {
             // Create new index
-            create_bm25_index(Some(directory))?
+            create_bm25_index(Some(directory))
         }
-    };
-
-    Ok(index)
+    }
 }
 
 /// Create index reader with automatic reload policy

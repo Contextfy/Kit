@@ -11,6 +11,9 @@ use arrow::datatypes::{DataType, Field, Schema};
 use lancedb::connection::Connection as LanceConnection;
 use std::sync::Arc;
 
+// Import the rigorous schema validation from the vector slice
+use crate::slices::vector::schema::validate_knowledge_schema;
+
 /// 向量维度常量
 ///
 /// 根据实际使用的嵌入模型调整此值：
@@ -116,17 +119,14 @@ pub async fn create_table_if_not_exists(conn: &LanceConnection, table_name: &str
             .await
             .with_context(|| format!("Failed to get schema for existing table: {}", table_name))?;
 
-        let expected_schema = knowledge_record_schema();
-
-        // 简单验证：检查字段数量
-        if existing_schema.fields().len() != expected_schema.fields().len() {
-            anyhow::bail!(
-                "Table '{}' exists but schema mismatch: expected {} fields, got {} fields",
+        // 使用 rigorous schema validation from vector slice
+        validate_knowledge_schema(&existing_schema).map_err(|e| {
+            anyhow::anyhow!(
+                "Table '{}' exists but schema validation failed: {}",
                 table_name,
-                expected_schema.fields().len(),
-                existing_schema.fields().len()
-            );
-        }
+                e
+            )
+        })?;
 
         return Ok(());
     }
@@ -148,32 +148,14 @@ pub async fn create_table_if_not_exists(conn: &LanceConnection, table_name: &str
         )
     })?;
 
-    // 验证 vector 字段类型
-    let vector_field = created_schema
-        .field_with_name("vector")
-        .with_context(|| "Created table missing 'vector' field")?;
-
-    match vector_field.data_type() {
-        DataType::FixedSizeList(field, size) => {
-            if *size != VECTOR_DIM {
-                anyhow::bail!(
-                    "Vector field dimension mismatch: expected {}, got {}",
-                    VECTOR_DIM,
-                    size
-                );
-            }
-            if field.data_type() != &DataType::Float32 {
-                anyhow::bail!(
-                    "Vector field element type mismatch: expected Float32, got {:?}",
-                    field.data_type()
-                );
-            }
-        }
-        _ => anyhow::bail!(
-            "Vector field is not FixedSizeList, got {:?}",
-            vector_field.data_type()
-        ),
-    }
+    // 使用 rigorous schema validation from vector slice
+    validate_knowledge_schema(&created_schema).map_err(|e| {
+        anyhow::anyhow!(
+            "Newly created table '{}' failed schema validation: {}",
+            table_name,
+            e
+        )
+    })?;
 
     Ok(())
 }

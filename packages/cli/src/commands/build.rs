@@ -1,7 +1,9 @@
 use anyhow::Result;
 use contextfy_core::{parse_markdown, SearchEngine};
 use serde::Deserialize;
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 /// 默认文档目录路径
@@ -73,6 +75,7 @@ pub async fn build() -> Result<()> {
     let mut documents_count = 0;
     let mut sections_count = 0;
     let mut parse_errors = 0;
+    let mut global_id_counter = 0u64;
 
     for entry in fs::read_dir(examples_dir)? {
         let entry = entry?;
@@ -84,11 +87,21 @@ pub async fn build() -> Result<()> {
 
             match parse_markdown(&file_path) {
                 Ok(doc) => {
+                    // Generate unique ID from file path hash + counter
+                    let mut hasher = DefaultHasher::new();
+                    file_path.hash(&mut hasher);
+                    let path_hash = hasher.finish();
+
                     // Add document sections to SearchEngine
                     if doc.sections.is_empty() {
                         // No sections, add the whole document as one entry
-                        let id = format!("{}-0", doc.title.replace(' ', "-"));
-                        if let Err(e) = engine.add(&id, &doc.title, &doc.summary[..doc.summary.len().min(200)], &doc.content).await {
+                        let id = format!("{}-{}", path_hash, global_id_counter);
+                        global_id_counter += 1;
+
+                        // Safe character boundary truncation
+                        let summary_truncated = doc.summary.chars().take(200).collect::<String>();
+
+                        if let Err(e) = engine.add(&id, &doc.title, &summary_truncated, &doc.content).await {
                             eprintln!("  ✗ Failed to add {}: {}", id, e);
                             parse_errors += 1;
                         } else {
@@ -98,12 +111,17 @@ pub async fn build() -> Result<()> {
                         }
                     } else {
                         // Add each section as a separate entry
-                        for (i, section) in doc.sections.iter().enumerate() {
-                            let id = format!("{}-{}", doc.title.replace(' ', "-"), i);
+                        for section in doc.sections.iter() {
+                            let id = format!("{}-{}", path_hash, global_id_counter);
+                            global_id_counter += 1;
+
+                            // Safe character boundary truncation
+                            let summary_truncated = section.summary.chars().take(200).collect::<String>();
+
                             if let Err(e) = engine.add(
                                 &id,
                                 &section.section_title,
-                                &section.summary[..section.summary.len().min(200)],
+                                &summary_truncated,
                                 &section.content
                             ).await {
                                 eprintln!("  ✗ Failed to add section {}: {}", id, e);

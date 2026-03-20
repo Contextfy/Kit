@@ -91,12 +91,8 @@ pub mod contextfy {
         /// console.log(details.content);
         /// ```
         #[napi]
-        pub async fn inspect(&self, id: String) -> napi::Result<Details> {
-            Ok(Details {
-                id,
-                title: "Stub Details".to_string(),
-                content: "This is stub content from the bridge layer".to_string(),
-            })
+        pub async fn inspect(&self, _id: String) -> napi::Result<Details> {
+            Err(napi::Error::from_reason("inspect not implemented"))
         }
     }
 }

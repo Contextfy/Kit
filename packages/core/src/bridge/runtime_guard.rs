@@ -35,8 +35,15 @@ static GLOBAL_RUNTIME: OnceCell<Runtime> = OnceCell::new();
 /// returning a BridgeError if initialization fails instead of panicking.
 fn get_global_runtime() -> Result<&'static Runtime, BridgeError> {
     GLOBAL_RUNTIME.get_or_try_init(|| {
+        // Read worker thread count from environment variable, default to 2
+        let worker_threads = std::env::var("CONTEXTFY_BRIDGE_WORKERS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(2);
+
         tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
+            .worker_threads(worker_threads)
             .thread_name("contextfy-bridge-runtime")
             .enable_all()
             .build()

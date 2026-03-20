@@ -134,39 +134,8 @@ impl From<AppError> for BridgeError {
                 }
             }
             AppError::Infra(infra_err) => {
-                // Extract the source from InfraError variants to preserve error chain
-                match infra_err {
-                    InfraError::Database { context, source } => {
-                        Self::Runtime {
-                            context: format!("Database error: {}", context),
-                            source,
-                        }
-                    }
-                    InfraError::Io { path, context, source } => {
-                        Self::Runtime {
-                            context: format!("IO error at {}: {}", path.display(), context),
-                            source,
-                        }
-                    }
-                    InfraError::Network { context, source } => {
-                        Self::Runtime {
-                            context: format!("Network error: {}", context),
-                            source,
-                        }
-                    }
-                    InfraError::Serialization { context, source } => {
-                        Self::Serialization {
-                            context,
-                            source,
-                        }
-                    }
-                    InfraError::Other(msg) => {
-                        Self::Runtime {
-                            context: format!("Infrastructure error: {}", msg),
-                            source: None,
-                        }
-                    }
-                }
+                // Delegate to From<InfraError> for BridgeError to avoid duplication
+                infra_err.into()
             }
         }
     }

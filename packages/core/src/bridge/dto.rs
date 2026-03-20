@@ -269,7 +269,7 @@ mod tests {
 
         let response = SearchResponseDto::from_kernel(hits, 3, 0);
 
-        // Verify ordering is preserved (should be descending by score)
+        // Verify input ordering is preserved (not sorted by DTO conversion)
         assert_eq!(response.hits[0].id, "doc1"); // 0.5
         assert_eq!(response.hits[1].id, "doc2"); // 0.9
         assert_eq!(response.hits[2].id, "doc3"); // 0.7

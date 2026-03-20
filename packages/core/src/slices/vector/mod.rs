@@ -6,7 +6,7 @@
 //!
 //! ## Architecture
 //!
-//! - **trait.rs**: VectorStoreTrait - backend-agnostic interface
+//! - **trait_.rs**: VectorStoreTrait - backend-agnostic interface
 //! - **schema.rs**: Arrow schema definitions for LanceDB (private)
 //! - **connection.rs**: LanceDB connection and table management (private)
 //! - **lancedb_impl.rs**: Concrete LanceDB implementation (private)
@@ -33,9 +33,13 @@
 pub mod trait_;
 
 // Concrete implementations and helpers are private to prevent infrastructure leakage
-mod schema;
+pub(crate) mod schema;
 pub(crate) mod connection;
 pub(crate) mod lancedb_impl;
+
+// Export schema validation function for use by deprecated lancedb_store module
+// during the transition period (will be removed once lancedb_store is fully migrated)
+pub use schema::validate_knowledge_schema;
 
 // **MANDATORY**: Only export the trait, NOT concrete implementations
 // Concrete types like LanceDbStore must not be accessible from outside this slice

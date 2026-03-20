@@ -26,7 +26,7 @@ packages/core/src/
 └── slices/
     ├── vector/
     │   ├── mod.rs
-    │   ├── trait.rs
+    │   ├── trait_.rs
     │   ├── schema.rs
     │   ├── connection.rs
     │   └── lancedb_impl.rs

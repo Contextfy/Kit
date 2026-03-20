@@ -225,31 +225,4 @@ mod tests {
 
         assert!(found_source, "Source chain should be preserved");
     }
-
-    #[test]
-    fn test_score_validation() {
-        use crate::kernel::types::Score;
-
-        // Valid scores
-        assert!(Score::new(0.5).is_relevant());
-        assert!(Score::new(1.0).is_relevant());
-
-        // Invalid scores
-        assert!(!Score::new(0.0).is_relevant());
-        assert!(!Score::new(-0.1).is_relevant());
-    }
-
-    #[test]
-    fn test_query_validation() {
-        use crate::kernel::types::Query;
-
-        // Valid queries
-        let q1 = Query::new("test", 10);
-        assert_eq!(q1.text, "test");
-        assert_eq!(q1.limit, 10);
-
-        // Empty query should be handled at domain level
-        let q2 = Query::new("", 10);
-        assert!(q2.text.is_empty());
-    }
 }

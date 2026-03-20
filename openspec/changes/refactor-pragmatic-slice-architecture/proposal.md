@@ -26,5 +26,8 @@
   - `packages/core/src/slices/hybrid/**`
   - 历史 `KnowledgeStore` 与旧 bridge 相关实现
 - **BREAKING**:
-  - 仅内部模块结构重组，不直接变更对外产品语义
-  - 若存在内部 API 直接依赖旧路径，将迁移到新切片边界
+  - 公共 API 入口已迁移至新的门面模式：
+    - 旧路径：直接使用 `KnowledgeStore` 已被删除
+    - 新路径：必须通过 `SearchEngine` (packages/core/src/facade.rs) 或 `BridgeApi` (packages/core/src/bridge/api.rs)
+  - Bridge 层 Node.js FFI 接口保持兼容（DTO 层隔离变更）
+  - 内部模块结构重组，外部调用方需更新导入路径

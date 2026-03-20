@@ -30,4 +30,4 @@ pub mod orchestrator;
 
 // Re-export main types at the module level
 pub use rrf::{RrfOrchestrator, RrfResult};
-pub use orchestrator::HybridOrchestrator;
+pub use orchestrator::{HybridOrchestrator, DeleteResult};

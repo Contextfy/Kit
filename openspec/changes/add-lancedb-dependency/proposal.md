@@ -28,7 +28,7 @@ arrow = { workspace = true }  # 已在工作空间中，使用版本 57
 
 ### 2. LanceDB Schema 定义
 
-创建 `packages/core/src/storage/lancedb_store.rs`，使用 Arrow Schema 定义：
+创建 `packages/core/src/slices/vector/schema.rs`，使用 Arrow Schema 定义：
 - `id`：String（主键）
 - `title`：String
 - `summary`：String（用于 Scout 检索）
@@ -39,15 +39,15 @@ arrow = { workspace = true }  # 已在工作空间中，使用版本 57
 
 ### 3. 连通性脚手架
 
-实现基础初始化函数：
+实现基础初始化函数（在 `packages/core/src/slices/vector/connection.rs`）：
 ```rust
-pub async fn connect_lancedb(uri: &str) -> Result<Connection>
-pub async fn create_table_if_not_exists(conn: &Connection, table_name: &str) -> Result<()>
+pub async fn connect(uri: &str) -> Result<Connection>
+pub async fn initialize_table(conn: &Connection, table_name: &str) -> Result<()>
 ```
 
 ### 4. 单元测试验证
 
-在 `packages/core/src/storage/lancedb_store.rs` 中创建 `#[tokio::test]`：
+在 `packages/core/src/slices/vector/` 模块中创建 `#[tokio::test]`：
 - 连接到临时本地目录（使用 `tempfile::tempdir()`）
 - 使用定义的 Schema 创建表
 - 验证 Schema 正确加载
@@ -66,5 +66,5 @@ pub async fn create_table_if_not_exists(conn: &Connection, table_name: &str) -> 
 - Affected specs: core-engine
 - Affected code:
   - packages/core/Cargo.toml（添加依赖）
-  - packages/core/src/storage/mod.rs（添加模块声明）
-  - packages/core/src/storage/lancedb_store.rs（新建文件）
+  - packages/core/src/slices/vector/**（新建模块：schema.rs, connection.rs, lancedb_impl.rs, trait_.rs, mod.rs）
+- **BREAKING**: None（纯基础设施添加，不修改现有代码）

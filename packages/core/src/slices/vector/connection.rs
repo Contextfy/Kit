@@ -120,7 +120,8 @@ pub(crate) async fn create_table_if_not_exists(
 
 /// Initialize a LanceDB database
 ///
-/// This is a convenience function that combines connection and table creation.
+/// This is a convenience function that combines connection and table creation,
+/// returning the initialized connection for immediate use.
 ///
 /// # Parameters
 ///
@@ -129,7 +130,7 @@ pub(crate) async fn create_table_if_not_exists(
 ///
 /// # Returns
 ///
-/// Returns `Ok(())` when database is initialized.
+/// Returns `LanceConnection` when database is initialized successfully.
 ///
 /// # Errors
 ///
@@ -143,13 +144,14 @@ pub(crate) async fn create_table_if_not_exists(
 /// // Note: This function is internal-only (#[doc(hidden)]).
 /// // External code should use the public VectorStoreTrait instead.
 /// // Example flow:
-/// let conn = connect("data/db").await?;
-/// create_table_if_not_exists(&conn, "knowledge").await?;
+/// let conn = initialize("data/db", "knowledge").await?;
+/// // Use conn directly without reconnecting
 /// ```
 #[allow(dead_code)]
-pub(crate) async fn initialize(uri: &str, table_name: &str) -> Result<()> {
+pub(crate) async fn initialize(uri: &str, table_name: &str) -> Result<LanceConnection> {
     let conn = connect(uri).await?;
-    create_table_if_not_exists(&conn, table_name).await
+    create_table_if_not_exists(&conn, table_name).await?;
+    Ok(conn)
 }
 
 #[cfg(test)]
@@ -236,13 +238,12 @@ mod tests {
         let db_uri = temp_dir.path().to_str().expect("Invalid path");
         let table_name = "test_init";
 
-        // Initialize database
-        initialize(db_uri, table_name)
+        // Initialize database and get connection
+        let conn = initialize(db_uri, table_name)
             .await
             .expect("Failed to initialize database");
 
-        // Reconnect and verify table exists
-        let conn = connect(db_uri).await.expect("Failed to reconnect");
+        // Verify table exists using the returned connection
         let table_names = conn
             .table_names()
             .execute()

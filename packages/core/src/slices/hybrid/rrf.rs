@@ -160,8 +160,10 @@ impl RrfOrchestrator {
     ///
     /// # Errors
     ///
-    /// Returns error if fusion fails (e.g., empty input). This ensures that
-    /// data problems are not silently masked as "no results".
+    /// Returns error only if no ranked lists are provided. Note that since
+    /// `fuse_two` always provides exactly two lists to the underlying `fuse`
+    /// method, this function will never actually return an error. Empty result
+    /// lists are valid inputs and will produce an empty result.
     pub fn fuse_two(&self, results1: Vec<Hit>, results2: Vec<Hit>) -> Result<Vec<RrfResult>, AppError> {
         self.fuse(vec![results1, results2], None)
     }

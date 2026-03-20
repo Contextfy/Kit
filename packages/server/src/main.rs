@@ -73,6 +73,8 @@ impl ApiErrorType {
 /// of message content changes.
 #[derive(Debug, Serialize)]
 struct ApiError {
+    #[serde(skip)]
+    error_type: ApiErrorType,
     error: String,
     message: String,
 }
@@ -81,6 +83,7 @@ impl ApiError {
     /// Create a new API error with the specified type and message
     fn new(error_type: ApiErrorType, message: impl Into<String>) -> Self {
         Self {
+            error_type,
             error: error_type.as_str().to_string(),
             message: message.into(),
         }
@@ -104,13 +107,7 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        // Map error string to status code (safe because we control error generation)
-        let status = match self.error.as_str() {
-            "Bad Request" => ApiErrorType::BadRequest.status_code(),
-            "Not Found" => ApiErrorType::NotFound.status_code(),
-            _ => ApiErrorType::InternalServerError.status_code(),
-        };
-
+        let status = self.error_type.status_code();
         (status, Json(self)).into_response()
     }
 }
@@ -191,7 +188,10 @@ async fn search_handler(
         return Err(ApiError::bad_request("Search query cannot be empty"));
     }
 
-    tracing::info!(query = %query_text, "Search request received");
+    tracing::info!(
+        query_length = query_text.len(),
+        "Search request received"
+    );
 
     let engine_guard = engine.read().await;
 
@@ -211,7 +211,7 @@ async fn search_handler(
             }))
         }
         Err(e) => {
-            tracing::error!(error = ?e, query = %query_text, "Search failed");
+            tracing::error!(error = ?e, query_length = query_text.len(), "Search failed");
             Err(ApiError::internal("Failed to process search request due to an internal error"))
         }
     }

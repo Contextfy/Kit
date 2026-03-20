@@ -64,7 +64,36 @@ pub(crate) fn create_bm25_schema() -> Schema {
 /// Validate that a schema matches the expected BM25 schema
 ///
 /// This is used to verify that an existing Tantivy index is compatible
-/// with our expected schema.
+/// with our expected schema. The validation performs comprehensive checks:
+///
+/// # Validation Approach
+///
+/// The validation uses a two-tier approach:
+///
+/// 1. **Field type comparison** (primary): Compares the complete `FieldType` enum
+///    which includes `TextOptions` containing:
+///    - Indexing options (tokenizer name, index record option, fieldnorms)
+///    - Stored flag
+///    - Fast field options
+///    - Coerce flag
+///
+///    This comprehensive comparison catches most differences (tokenizer,
+///    storage flags, indexing options) in a single check.
+///
+/// 2. **Field-specific validation** (secondary): After the type comparison passes,
+///    performs additional checks for specific fields:
+///    - ID field: Validates use of "raw" tokenizer (STRING type, not tokenized)
+///    - TEXT fields: Validates use of "jieba" tokenizer for Chinese text
+///    - All fields: Validates that they are stored
+///
+/// # Validation Checks
+///
+/// 1. Field count matches expected count
+/// 2. All required field names exist
+/// 3. Each field has the correct `FieldType` (including all options)
+/// 4. ID field uses "raw" tokenizer (no tokenization)
+/// 5. TEXT fields use "jieba" tokenizer (Chinese text segmentation)
+/// 6. All fields are stored
 ///
 /// # Parameters
 ///
@@ -90,11 +119,98 @@ pub(crate) fn validate_bm25_schema(schema: &Schema) -> Result<(), String> {
         ));
     }
 
-    // Verify all expected fields exist
+    // Verify all expected fields exist with correct types and properties
     for field_name in &[FIELD_ID, FIELD_TITLE, FIELD_SUMMARY, FIELD_CONTENT, FIELD_KEYWORDS] {
-        schema
+        // Check field exists
+        let field = schema
             .get_field(field_name)
             .map_err(|e| format!("Missing field '{}': {}", field_name, e))?;
+
+        // Get the field entry
+        let entry = schema.get_field_entry(field);
+
+        // Get expected field entry for comparison
+        let expected_field = expected
+            .get_field(field_name)
+            .map_err(|_| format!("Expected field '{}' not found in expected schema", field_name))?;
+        let expected_entry = expected.get_field_entry(expected_field);
+
+        // Validate field type and properties match
+        // This catches differences in tokenizer, stored flag, indexing options, etc.
+        if entry.field_type() != expected_entry.field_type() {
+            return Err(format!(
+                "Field '{}' type mismatch: expected {:?}, got {:?}",
+                field_name,
+                expected_entry.field_type(),
+                entry.field_type()
+            ));
+        }
+
+        // For TEXT fields (all except ID), validate tokenizer and storage
+        if *field_name != FIELD_ID {
+            // TEXT fields should have indexing options with tokenizer
+            let text_options = match entry.field_type() {
+                tantivy::schema::FieldType::Str(opts) => opts,
+                _ => {
+                    return Err(format!(
+                        "Field '{}' should be Str(TEXT) type",
+                        field_name
+                    ))
+                }
+            };
+
+            let indexing = text_options.get_indexing_options().ok_or_else(|| {
+                format!("Field '{}' is TEXT but has no indexing options", field_name)
+            })?;
+
+            let tokenizer = indexing.tokenizer();
+            if tokenizer != "jieba" {
+                return Err(format!(
+                    "Field '{}' has incorrect tokenizer: expected 'jieba', got '{}'",
+                    field_name, tokenizer
+                ));
+            }
+
+            // Verify TEXT fields are stored
+            if !text_options.is_stored() {
+                return Err(format!(
+                    "Field '{}' should be STORED but is not",
+                    field_name
+                ));
+            }
+        } else {
+            // ID field should be STRING type (indexed but not tokenized with "raw" tokenizer)
+            let text_options = match entry.field_type() {
+                tantivy::schema::FieldType::Str(opts) => opts,
+                _ => {
+                    return Err(format!(
+                        "Field '{}' should be Str type",
+                        field_name
+                    ))
+                }
+            };
+
+            // ID field should have indexing options with "raw" tokenizer (not tokenized)
+            let indexing = text_options.get_indexing_options().ok_or_else(|| {
+                format!("Field '{}' should have indexing options with 'raw' tokenizer", field_name)
+            })?;
+
+            let tokenizer = indexing.tokenizer();
+            if tokenizer != "raw" {
+                return Err(format!(
+                    "Field '{}' has incorrect tokenizer: expected 'raw' (for STRING type), got '{}'",
+                    field_name, tokenizer
+                ));
+            }
+
+            // Verify ID field is stored
+            if !text_options.is_stored() {
+                return Err(format!(
+                    "Field '{}' should be STORED but is not",
+                    field_name
+                ));
+            }
+        }
     }
 
     Ok(())
@@ -143,9 +259,27 @@ mod tests {
 
     #[test]
     fn test_validate_bm25_schema_missing_field() {
-        // Create a schema without title field
+        // Create a schema with correct field count but missing title field
+        // We need to add an extra field to keep count at 5
         let mut builder = Schema::builder();
         builder.add_text_field(FIELD_ID, tantivy::schema::STRING | STORED);
+        builder.add_text_field(FIELD_SUMMARY, TEXT | STORED);
+        builder.add_text_field(FIELD_CONTENT, TEXT | STORED);
+        builder.add_text_field(FIELD_KEYWORDS, TEXT | STORED);
+        builder.add_text_field("extra_field", TEXT | STORED); // Extra field to maintain count
+        let wrong_schema = builder.build();
+
+        let result = validate_bm25_schema(&wrong_schema);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing field 'title'"));
+    }
+
+    #[test]
+    fn test_validate_bm25_schema_wrong_field_type() {
+        // Create a schema where ID field is TEXT instead of STRING
+        let mut builder = Schema::builder();
+        builder.add_text_field(FIELD_ID, TEXT | STORED); // Wrong: should be STRING
+        builder.add_text_field(FIELD_TITLE, TEXT | STORED);
         builder.add_text_field(FIELD_SUMMARY, TEXT | STORED);
         builder.add_text_field(FIELD_CONTENT, TEXT | STORED);
         builder.add_text_field(FIELD_KEYWORDS, TEXT | STORED);
@@ -153,8 +287,67 @@ mod tests {
 
         let result = validate_bm25_schema(&wrong_schema);
         assert!(result.is_err());
-        // Field count is checked first, so we expect that error
-        assert!(result.unwrap_err().contains("Field count mismatch"));
+        assert!(result.unwrap_err().contains("Field 'id' type mismatch"));
+    }
+
+    #[test]
+    fn test_validate_bm25_schema_missing_tokenizer() {
+        // Create a schema where TEXT fields don't have jieba tokenizer
+        let mut builder = Schema::builder();
+        builder.add_text_field(FIELD_ID, tantivy::schema::STRING | STORED);
+        // Add TEXT fields without custom tokenizer (uses default)
+        builder.add_text_field(FIELD_TITLE, TEXT | STORED);
+        builder.add_text_field(FIELD_SUMMARY, TEXT | STORED);
+        builder.add_text_field(FIELD_CONTENT, TEXT | STORED);
+        builder.add_text_field(FIELD_KEYWORDS, TEXT | STORED);
+        let wrong_schema = builder.build();
+
+        let result = validate_bm25_schema(&wrong_schema);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err();
+        // Field type comparison catches the tokenizer difference
+        assert!(err_msg.contains("type mismatch") || err_msg.contains("tokenizer"));
+    }
+
+    #[test]
+    fn test_validate_bm25_schema_not_stored() {
+        // Create a schema where a field is not stored
+        let mut builder = Schema::builder();
+        builder.add_text_field(FIELD_ID, tantivy::schema::STRING | STORED);
+        builder.add_text_field(FIELD_TITLE, TEXT); // Not stored
+        builder.add_text_field(FIELD_SUMMARY, TEXT | STORED);
+        builder.add_text_field(FIELD_CONTENT, TEXT | STORED);
+        builder.add_text_field(FIELD_KEYWORDS, TEXT | STORED);
+        let wrong_schema = builder.build();
+
+        let result = validate_bm25_schema(&wrong_schema);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err();
+        // Field type comparison catches the stored flag difference
+        assert!(err_msg.contains("type mismatch") || err_msg.contains("STORED"));
+    }
+
+    #[test]
+    fn test_validate_bm25_schema_id_tokenized() {
+        // Create a schema where ID field has jieba tokenizer (should use "raw" tokenizer instead)
+        let text_indexing = TextFieldIndexing::default().set_tokenizer("jieba");
+        let text_options = TextOptions::default()
+            .set_indexing_options(text_indexing)
+            .set_stored();
+
+        let mut builder = Schema::builder();
+        builder.add_text_field(FIELD_ID, text_options); // Wrong: ID should use "raw" tokenizer
+        builder.add_text_field(FIELD_TITLE, TEXT | STORED);
+        builder.add_text_field(FIELD_SUMMARY, TEXT | STORED);
+        builder.add_text_field(FIELD_CONTENT, TEXT | STORED);
+        builder.add_text_field(FIELD_KEYWORDS, TEXT | STORED);
+        let wrong_schema = builder.build();
+
+        let result = validate_bm25_schema(&wrong_schema);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err();
+        // Field type comparison catches the tokenizer difference
+        assert!(err_msg.contains("type mismatch") || err_msg.contains("tokenizer") || err_msg.contains("raw"));
     }
 
     #[test]

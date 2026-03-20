@@ -70,25 +70,14 @@ impl BridgeApi {
         #[allow(unused_variables)]
         let _kernel_query: crate::kernel::types::Query = query.into();
 
-        // Use RuntimeGuard for sync FFI - now returns Result
-        match RuntimeGuard::block_on(async {
+        // Use RuntimeGuard for sync FFI - flattened with ? operator
+        RuntimeGuard::block_on(async {
             // Phase 1: Return empty response
             // Phase 2/3: Call actual search logic
             Ok::<SearchResponseDto, AppError>(SearchResponseDto::empty(0))
-        }) {
-            Ok(inner_result) => match inner_result {
-                Ok(response) => Ok(response),
-                Err(app_err) => {
-                    // Convert AppError to BridgeError, then to NapiError
-                    let bridge_err: BridgeError = app_err.into();
-                    Err(bridge_err.into())
-                }
-            },
-            Err(guard_err) => {
-                // RuntimeGuard returned an error (e.g., called from async context)
-                Err(guard_err.into())
-            }
-        }
+        })
+        .map_err(|e| BridgeError::from(e).into())
+        .and_then(|inner_result| inner_result.map_err(|e| BridgeError::from(e).into()))
     }
 
     /// Placeholder: Asynchronous search via bridge
@@ -106,7 +95,7 @@ impl BridgeApi {
     /// Empty response in Phase 1 (will be implemented in Phase 2/3)
     pub async fn async_search(&self, query: QueryDto) -> Result<SearchResponseDto> {
         // Convert DTO to kernel type
-        let _kernel_query = query;
+        let _kernel_query: crate::kernel::types::Query = query.into();
 
         // Direct await - NO RuntimeGuard needed
         // Phase 1: Return empty response

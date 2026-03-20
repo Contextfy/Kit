@@ -21,7 +21,7 @@ regex = { workspace = true }
 fastembed = { workspace = true }
 napi = { workspace = true, features = ["napi4", "async"] }
 once_cell = { workspace = true }
-async-trait = "0.1.89"
+async-trait = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

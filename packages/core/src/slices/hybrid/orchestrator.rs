@@ -21,6 +21,39 @@ use super::super::vector::VectorStoreTrait;
 use super::super::bm25::Bm25StoreTrait;
 use super::rrf::RrfOrchestrator;
 
+/// Result of a hybrid delete operation
+///
+/// Contains the individual deletion results from both backends.
+pub struct DeleteResult {
+    /// Result of vector store deletion
+    pub vector_deleted: Result<bool, AppError>,
+    /// Result of BM25 store deletion
+    pub bm25_deleted: Result<bool, AppError>,
+}
+
+impl DeleteResult {
+    /// Check if at least one backend succeeded in deletion
+    pub fn any_success(&self) -> bool {
+        match (&self.vector_deleted, &self.bm25_deleted) {
+            (Ok(true), _) | (_, Ok(true)) => true,
+            _ => false,
+        }
+    }
+
+    /// Check if both backends succeeded in deletion
+    pub fn both_success(&self) -> bool {
+        matches!((&self.vector_deleted, &self.bm25_deleted), (Ok(true), Ok(true)))
+    }
+
+    /// Get the first error encountered, if any
+    pub fn first_error(&self) -> Option<&AppError> {
+        self.vector_deleted
+            .as_ref()
+            .err()
+            .or_else(|| self.bm25_deleted.as_ref().err())
+    }
+}
+
 /// Hybrid search orchestrator
 ///
 /// Combines results from BM25 and vector search using RRF fusion.
@@ -243,34 +276,49 @@ impl HybridOrchestrator {
     ///
     /// # Returns
     ///
-    /// * `Ok(true)` - Document was deleted from at least one store
-    /// * `Ok(false)` - Document was not found in either store
-    pub async fn delete(&self, id: &str) -> Result<bool, AppError> {
+    /// Returns `DeleteResult` containing the individual results from each backend.
+    /// This allows the caller to inspect which specific deletion (vector or BM25) failed.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let result = orchestrator.delete("doc-id").await;
+    /// if result.any_success() {
+    ///     println!("Document deleted from at least one backend");
+    /// }
+    /// if let Some(e) = result.first_error() {
+    ///     eprintln!("One backend failed: {:?}", e);
+    /// }
+    /// ```
+    pub async fn delete(&self, id: &str) -> DeleteResult {
         // Delete from both stores in parallel
         let (vector_result, bm25_result) = tokio::join!(
             self.vector_store.delete(id),
             self.bm25_store.delete(id)
         );
 
-        // Handle errors gracefully - if one fails, continue with the other
+        // Preserve individual results - don't suppress errors
         let vector_deleted = match vector_result {
-            Ok(deleted) => deleted,
+            Ok(deleted) => Ok(deleted),
             Err(e) => {
-                warn!(error = ?e, id = %id, "Vector delete failed, continuing with BM25 result");
-                false
+                warn!(error = ?e, id = %id, "Vector delete failed");
+                Err(e)
             }
         };
 
         let bm25_deleted = match bm25_result {
-            Ok(deleted) => deleted,
+            Ok(deleted) => Ok(deleted),
             Err(e) => {
-                warn!(error = ?e, id = %id, "BM25 delete failed, continuing with vector result");
-                false
+                warn!(error = ?e, id = %id, "BM25 delete failed");
+                Err(e)
             }
         };
 
-        // Return true if at least one deletion succeeded
-        Ok(vector_deleted || bm25_deleted)
+        // Return detailed results
+        DeleteResult {
+            vector_deleted,
+            bm25_deleted,
+        }
     }
 
     /// Check health of both stores
@@ -413,6 +461,10 @@ mod tests {
         async fn get_by_id(&self, _id: &str) -> Result<Option<Bm25Result>, AppError> {
             Ok(None)
         }
+
+        async fn get_by_ids(&self, _ids: &[String]) -> Result<Vec<Option<Bm25Result>>, AppError> {
+            Ok(vec![])
+        }
     }
 
     /// Helper to create a test orchestrator
@@ -469,8 +521,11 @@ mod tests {
     async fn test_hybrid_delete() {
         let orchestrator = create_test_orchestrator().await;
         let result = orchestrator.delete("id").await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), true);
+        assert!(result.any_success());
+        assert!(result.both_success());
+        assert!(result.first_error().is_none());
+        assert!(matches!(result.vector_deleted, Ok(true)));
+        assert!(matches!(result.bm25_deleted, Ok(true)));
     }
 
     #[tokio::test]
@@ -478,6 +533,6 @@ mod tests {
         let orchestrator = create_test_orchestrator().await;
         let result = orchestrator.health_check().await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 }
