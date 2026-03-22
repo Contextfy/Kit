@@ -37,7 +37,7 @@ impl From<Query> for QueryDto {
     fn from(query: Query) -> Self {
         QueryDto {
             text: query.text,
-            limit: query.limit as u32,
+            limit: u32::try_from(query.limit).unwrap_or(u32::MAX),
         }
     }
 }

@@ -161,6 +161,3 @@ fn get_function_regex() -> &'static Regex {
 - 文件变更清单：详细列出所有修改的文件和功能点
 - 破坏性变更说明：确认向后兼容，无迁移成本
 - 补充说明：突出架构师建议采纳（多值字段插入、严防正则污染）
-
-**PR 链接**：
-https://github.com/double-god/Kit/pull/new/feature/issue-10-keyword-extraction

@@ -111,8 +111,7 @@ impl RuntimeGuard {
     /// * `Err(BridgeError)` - If called from within an async context or runtime init fails
     pub fn block_on<F, T>(future: F) -> Result<T, BridgeError>
     where
-        F: Future<Output = T>,
-        T: Send + 'static,
+        F: Future<Output = T> + Send + 'static,
     {
         // Check if we're already in a runtime context
         match Handle::try_current() {

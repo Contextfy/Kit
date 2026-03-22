@@ -28,6 +28,12 @@ pub enum BridgeError {
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
+    /// Requested resource was not found
+    NotFound {
+        context: String,
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+
     /// Runtime execution error (e.g., Tokio panic, deadlock)
     Runtime {
         context: String,
@@ -78,10 +84,22 @@ impl BridgeError {
         }
     }
 
+    /// Create a new not found error
+    pub fn not_found(
+        context: impl Into<String>,
+        source: Option<impl Into<Box<dyn std::error::Error + Send + Sync>>>,
+    ) -> Self {
+        Self::NotFound {
+            context: context.into(),
+            source: source.map(|s| s.into()),
+        }
+    }
+
     /// Get the error message with context
     pub fn message(&self) -> String {
         match self {
             Self::InvalidArgument { context, .. } => format!("Invalid argument: {}", context),
+            Self::NotFound { context, .. } => format!("Not found: {}", context),
             Self::Runtime { context, .. } => format!("Runtime error: {}", context),
             Self::Serialization { context, .. } => format!("Serialization error: {}", context),
             Self::Other(msg) => msg.clone(),
@@ -92,6 +110,7 @@ impl BridgeError {
     pub fn status(&self) -> Status {
         match self {
             Self::InvalidArgument { .. } => Status::InvalidArg,
+            Self::NotFound { .. } => Status::GenericFailure, // NAPI doesn't have NotFound, use GenericFailure
             Self::Runtime { .. } => Status::GenericFailure,
             Self::Serialization { .. } => Status::InvalidArg,
             Self::Other(_) => Status::GenericFailure,
@@ -109,6 +128,7 @@ impl std::error::Error for BridgeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidArgument { source, .. }
+            | Self::NotFound { source, .. }
             | Self::Runtime { source, .. }
             | Self::Serialization { source, .. } => source
                 .as_ref()
@@ -144,9 +164,28 @@ impl From<AppError> for BridgeError {
 /// Convert from kernel DomainError to BridgeError
 impl From<DomainError> for BridgeError {
     fn from(err: DomainError) -> Self {
-        Self::InvalidArgument {
-            context: err.to_string(),
-            source: Some(Box::new(err)),
+        match err {
+            DomainError::InvalidQuery(msg) => {
+                Self::InvalidArgument {
+                    context: msg,
+                    source: None,
+                }
+            }
+            DomainError::NotFound(msg) => {
+                Self::NotFound {
+                    context: msg,
+                    source: None,
+                }
+            }
+            DomainError::NotAllowed(msg) => {
+                Self::InvalidArgument {
+                    context: msg,
+                    source: None,
+                }
+            }
+            DomainError::Other(msg) => {
+                Self::Other(msg)
+            }
         }
     }
 }

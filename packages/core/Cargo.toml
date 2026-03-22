@@ -26,6 +26,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-serial_test = "3"
 chrono = "0.4"
+serial_test = "3"
 rand = "0.8"

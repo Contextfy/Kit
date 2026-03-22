@@ -64,5 +64,5 @@ regex = "1"
 # Synchronization
 once_cell = "1.19"
 
-# chrono version managed by arrow dependencies
-chrono = "0.4"
+# Pin chrono to avoid arrow conflict
+chrono = "=0.4.30"

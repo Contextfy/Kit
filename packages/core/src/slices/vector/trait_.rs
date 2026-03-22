@@ -22,7 +22,25 @@ use crate::kernel::errors::AppError;
 /// 1. **Infrastructure Agnostic**: Methods accept/return kernel types only
 /// 2. **Error Mapping**: Implementation maps backend errors to `InfraError`
 /// 3. **Async**: All operations are async to support I/O-bound vector databases
-/// 4. **Option Semantics**: Empty results return `Ok(Some(vec![]))`, not `Err`
+/// 4. **Option Semantics**: Clear distinction between empty results and no data
+///
+/// # Option Semantics (`Ok(None)` vs `Ok(Some(vec![]))`)
+///
+/// **IMPORTANT**: Choose the right return type based on semantic meaning:
+///
+/// - **`Ok(Some(vec![]))`**: Search completed successfully, but found zero matches
+///   - Use this for normal "no results found" cases
+///   - Indicates the search was executed, but no documents matched
+///   - Example: Searching for "xyz" in a database with no matching documents
+///
+/// - **`Ok(None)`**: Search completed but returned no data (backend-specific)
+///   - Use this when the backend has a semantic concept of "no data"
+///   - Rare: Most implementations should prefer `Ok(Some(vec![]))`
+///   - Example: A cached backend that hasn't been populated yet
+///
+/// **Guideline**: Default to `Ok(Some(vec![]))` for empty search results.
+/// Only use `Ok(None)` if your backend has a strong semantic reason to distinguish
+/// "not found" from "empty results".
 ///
 /// # Usage Example
 ///
@@ -55,8 +73,10 @@ pub trait VectorStoreTrait: Send + Sync {
     ///
     /// # Returns
     ///
-    /// * `Ok(Some(hits))` - Search completed, hits may be empty if no results found
-    /// * `Ok(None)` - Search completed but returned no data (backend-specific semantic)
+    /// * `Ok(Some(hits))` - Search completed successfully
+    ///   - `hits` may be empty (`vec![]`) if no matches found
+    ///   - **IMPORTANT**: Empty results should return `Ok(Some(vec![]))`, not `Ok(None)`
+    /// * `Ok(None)` - Search completed but returned no data (backend-specific, rare)
     /// * `Err(AppError)` - Infrastructure error (connection, serialization, etc.)
     ///
     /// # Implementation Notes
@@ -65,6 +85,23 @@ pub trait VectorStoreTrait: Send + Sync {
     /// - Results must be converted to `Hit` with normalized scores [0.0, 1.0]
     /// - Scores should be descending (best match first)
     /// - Preserve the original error chain when mapping to `InfraError`
+    ///
+    /// # Example: Empty Results
+    ///
+    /// ```ignore
+    /// // When search finds no matches, return Ok(Some(vec![]))
+    /// let hits = vec![];  // Empty, not None
+    /// Ok(Some(hits))
+    /// ```
+    ///
+    /// # Example: No Data (Backend-Specific)
+    ///
+    /// ```ignore
+    /// // Only use Ok(None) if backend has semantic "no data" concept
+    /// if !backend.is_initialized() {
+    ///     return Ok(None);
+    /// }
+    /// ```
     async fn search(&self, query: &Query) -> Result<Option<Vec<Hit>>, AppError>;
 
     /// Add a document to the vector store

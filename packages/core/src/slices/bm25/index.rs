@@ -81,13 +81,14 @@ pub fn create_bm25_index(directory: Option<&Path>) -> Result<Index> {
 /// # Returns
 ///
 /// * `Ok(())` - Index exists and schema is valid
-/// * `Err(String)` - Index doesn't exist or schema is invalid
+/// * `Err(anyhow::Error)` - Index doesn't exist or schema is invalid
 #[allow(dead_code)]
-pub(crate) fn validate_existing_index(directory: &Path) -> Result<(), String> {
+pub(crate) fn validate_existing_index(directory: &Path) -> Result<()> {
     let index = Index::open_in_dir(directory)
-        .map_err(|e| format!("Failed to open index: {}", e))?;
+        .context("Failed to open index")?;
 
     validate_bm25_schema(&index.schema())
+        .map_err(|e| anyhow::anyhow!("Schema validation failed: {}", e))
 }
 
 /// Initialize BM25 index in directory

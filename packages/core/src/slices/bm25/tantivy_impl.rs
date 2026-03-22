@@ -259,7 +259,12 @@ impl Bm25StoreTrait for TantivyBm25Store {
             // Get writer lock
             let mut writer = writer_clone.blocking_lock();
 
-            // Add document to index
+            // Upsert: Delete existing document with same ID first (if exists)
+            // This prevents duplicate documents when updating an existing entry
+            let term = tantivy::Term::from_field_text(id_field, &id);
+            writer.delete_term(term);
+
+            // Add new document to index
             writer.add_document(doc)
                 .context("Failed to add document to index")?;
 

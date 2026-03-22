@@ -57,12 +57,18 @@ impl RrfOrchestrator {
     ///
     /// # Parameters
     ///
-    /// * `k` - RRF constant (default: 60)
+    /// * `k` - RRF constant (default: 60). Must be positive.
     ///
     /// # Returns
     ///
     /// Returns a new `RrfOrchestrator` instance.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `k <= 0`.
+    #[track_caller]
     pub fn new(k: i32) -> Self {
+        assert!(k > 0, "RRF constant k must be positive, got {}", k);
         Self { k }
     }
 
@@ -204,6 +210,18 @@ mod tests {
     fn test_orchestrator_creation() {
         let orchestrator = RrfOrchestrator::new(60);
         assert_eq!(orchestrator.k, 60);
+    }
+
+    #[test]
+    #[should_panic(expected = "RRF constant k must be positive")]
+    fn test_orchestrator_invalid_k() {
+        RrfOrchestrator::new(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "RRF constant k must be positive")]
+    fn test_orchestrator_negative_k() {
+        RrfOrchestrator::new(-1);
     }
 
     #[test]

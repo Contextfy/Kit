@@ -312,15 +312,14 @@ mod tests {
         let lancedb_uri = temp_dir.path().join("lancedb");
         let lancedb_uri_str = lancedb_uri.to_str().expect("Invalid path");
 
-        let result = build_hybrid_orchestrator(
+        let orchestrator = build_hybrid_orchestrator(
             None,  // In-memory BM25
             lancedb_uri_str,
             "test_knowledge",
-        ).await;
+        ).await.expect("Should build hybrid orchestrator");
 
-        assert!(result.is_ok(), "Should build hybrid orchestrator");
-        let orchestrator = result.unwrap();
-        assert!(orchestrator.health_check().await.is_ok());
+        let is_healthy = orchestrator.health_check().await.expect("Health check should succeed");
+        assert!(is_healthy, "Orchestrator should be healthy");
     }
 
     #[tokio::test]
@@ -329,15 +328,14 @@ mod tests {
         let lancedb_uri = temp_dir.path().join("lancedb");
         let lancedb_uri_str = lancedb_uri.to_str().expect("Invalid path");
 
-        let result = SearchEngine::new(
+        let engine = SearchEngine::new(
             None,
             lancedb_uri_str,
             "test_knowledge",
-        ).await;
+        ).await.expect("Should create search engine");
 
-        assert!(result.is_ok(), "Should create search engine");
-        let engine = result.unwrap();
-        assert!(engine.health_check().await.is_ok());
+        let is_healthy = engine.health_check().await.expect("Health check should succeed");
+        assert!(is_healthy, "Engine should be healthy");
     }
 
     #[tokio::test]
@@ -353,18 +351,20 @@ mod tests {
         ).await.expect("Failed to create engine");
 
         // Add document
-        let result = engine.add(
+        engine.add(
             "doc-1",
             "Rust Programming",
             "A guide to Rust",
             "Rust is a systems programming language",
-        ).await;
-
-        assert!(result.is_ok(), "Should add document");
+        ).await.expect("Should add document");
 
         // Search (Note: BM25 index needs commit which is handled internally)
-        let search_result = engine.search("Rust", 10).await;
-        // Search may return empty results due to index timing, but should not error
-        assert!(search_result.is_ok(), "Search should not error");
+        let results = engine.search("Rust", 10).await.expect("Search should not error");
+        // Search may return 0 or 1 results depending on index timing
+        // We're just verifying the search operation doesn't panic
+        assert!(results.len() <= 1, "Search should return at most 1 result");
+        if results.len() == 1 {
+            assert_eq!(results[0].id, "doc-1", "Should find the document we just added");
+        }
     }
 }

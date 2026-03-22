@@ -159,16 +159,9 @@ impl InfraError {
     }
 }
 
-// Implement From for common error types
-impl From<std::io::Error> for AppError {
-    fn from(err: std::io::Error) -> Self {
-        AppError::Infra(InfraError::Io {
-            path: PathBuf::from("<unknown>"),
-            context: "I/O operation failed".to_string(),
-            source: Some(Box::new(err)),
-        })
-    }
-}
+// NOTE: We intentionally do NOT provide a blanket From<std::io::Error> for AppError
+// because it loses important context (file path and operation details).
+// Instead, use InfraError::io() with proper context at each call site.
 
 #[cfg(test)]
 mod tests {
