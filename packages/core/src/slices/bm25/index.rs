@@ -89,68 +89,6 @@ pub fn create_bm25_index(directory: Option<&Path>) -> Result<Index> {
     Ok(index)
 }
 
-/// Validate and optionally initialize an existing Tantivy index
-///
-/// This function checks if an existing index is compatible with our schema.
-/// It can be used to verify index compatibility before opening.
-///
-/// # Parameters
-///
-/// * `directory` - Directory path containing the index
-///
-/// # Returns
-///
-/// * `Ok(())` - Index exists and schema is valid
-/// * `Err(anyhow::Error)` - Index doesn't exist or schema is invalid
-#[allow(dead_code)]
-pub(crate) fn validate_existing_index(directory: &Path) -> Result<()> {
-    let index = Index::open_in_dir(directory)
-        .context("Failed to open index")?;
-
-    validate_bm25_schema(&index.schema())
-        .map_err(|e| anyhow::anyhow!("Schema validation failed: {}", e))
-}
-
-/// Initialize BM25 index in directory
-///
-/// This is a convenience function that ensures a valid index exists
-/// in the specified directory. Creates a new index if needed.
-///
-/// # Parameters
-///
-/// * `directory` - Directory path for the index
-///
-/// # Returns
-///
-/// Returns `Result<Index>` on success.
-///
-/// # Errors
-///
-/// Returns error if:
-/// - Opening existing index fails
-/// - Existing index has incompatible schema
-/// - Creating new index fails
-#[allow(dead_code)]
-pub(crate) fn initialize_bm25_index(directory: &Path) -> Result<Index> {
-    match Index::open_in_dir(directory) {
-        Ok(idx) => {
-            // Validate schema
-            validate_bm25_schema(&idx.schema())
-                .map_err(|e| anyhow::anyhow!("Existing index has incompatible schema: {}", e))?;
-
-            // CRITICAL: Re-register Jieba tokenizer after reopening
-            // Tantivy does NOT persist tokenizer registrations
-            idx.tokenizers().register("jieba", JiebaTokenizer {});
-
-            Ok(idx)
-        }
-        Err(_) => {
-            // Create new index (which includes tokenizer registration)
-            create_bm25_index(Some(directory))
-        }
-    }
-}
-
 /// Create index reader with automatic reload policy
 ///
 /// This is a convenience function for creating index readers
@@ -239,42 +177,6 @@ mod tests {
         assert!(
             tokenizer.is_some(),
             "Jieba tokenizer should be registered in filesystem index"
-        );
-    }
-
-    #[test]
-    fn test_validate_existing_index() {
-        let temp_dir = TempDir::new().expect("Failed to create temp directory");
-        let index_path = temp_dir.path();
-
-        // Create index first
-        create_bm25_index(Some(index_path)).expect("Failed to create index");
-
-        // Validate existing index
-        let result = validate_existing_index(index_path);
-        assert!(result.is_ok(), "Should validate existing index");
-    }
-
-    #[test]
-    fn test_initialize_bm25_index() {
-        let temp_dir = TempDir::new().expect("Failed to create temp directory");
-        let index_path = temp_dir.path();
-
-        // Initialize new index
-        let index = initialize_bm25_index(index_path);
-        assert!(index.is_ok(), "Should initialize index");
-
-        // Reopen existing index
-        let index2 = initialize_bm25_index(index_path);
-        assert!(index2.is_ok(), "Should reopen existing index");
-
-        // CRITICAL: Verify tokenizer is registered after reopening
-        // This is a regression test for the tokenizer re-registration bug
-        let index2 = index2.unwrap();
-        let tokenizer = index2.tokenizers().get("jieba");
-        assert!(
-            tokenizer.is_some(),
-            "Jieba tokenizer MUST be re-registered after reopening existing index"
         );
     }
 

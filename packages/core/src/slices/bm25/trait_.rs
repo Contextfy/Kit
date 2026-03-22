@@ -101,6 +101,7 @@ pub trait Bm25StoreTrait: Send + Sync {
     /// * `title` - Document title
     /// * `summary` - Document summary
     /// * `content` - Document content
+    /// * `keywords` - Space-separated keywords for boosted search ranking
     ///
     /// # Phase 1 Limitation
     ///
@@ -113,6 +114,7 @@ pub trait Bm25StoreTrait: Send + Sync {
         title: &str,
         summary: &str,
         content: &str,
+        keywords: &str,
     ) -> Result<(), AppError>;
 
     /// Delete a document from the BM25 index
@@ -193,6 +195,7 @@ mod tests {
             _title: &str,
             _summary: &str,
             _content: &str,
+            _keywords: &str,
         ) -> Result<(), AppError> {
             Ok(())
         }
@@ -261,7 +264,7 @@ mod tests {
     #[tokio::test]
     async fn test_mock_store_add() {
         let store = MockBm25Store;
-        let result = store.add("id", "title", "summary", "content").await;
+        let result = store.add("id", "title", "summary", "content", "").await;
 
         assert!(result.is_ok());
     }

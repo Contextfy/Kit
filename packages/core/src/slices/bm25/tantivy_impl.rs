@@ -24,6 +24,9 @@ use super::trait_::{Bm25StoreTrait, Bm25Result};
 use super::schema::{FIELD_ID, FIELD_TITLE, FIELD_SUMMARY, FIELD_CONTENT, FIELD_KEYWORDS};
 use super::index::{create_bm25_index, create_index_reader};
 
+// TODO(BM25-Tuning): The hardcoded BM25_MAX_SCORE of 20.0 can compress/clip real BM25 scores
+// on different corpora. Consider making this a configurable parameter via env vars,
+// or implementing a percentile-based normalization (e.g., 95th/99th percentile of sample queries).
 /// Maximum BM25 score for normalization
 ///
 /// Tantivy returns BM25 scores which can be any positive value.
@@ -228,11 +231,13 @@ impl Bm25StoreTrait for TantivyBm25Store {
         title: &str,
         summary: &str,
         content: &str,
+        keywords: &str,
     ) -> Result<(), AppError> {
         let id = id.to_string();
         let title = title.to_string();
         let summary = summary.to_string();
         let content = content.to_string();
+        let keywords = keywords.to_string();
 
         let writer_clone = Arc::clone(&self.writer);
         let index_clone = self.index.clone();
@@ -251,7 +256,7 @@ impl Bm25StoreTrait for TantivyBm25Store {
                 .context("Missing summary field in schema")?;
             let content_field = schema.get_field(FIELD_CONTENT)
                 .context("Missing content field in schema")?;
-            let _keywords_field = schema.get_field(FIELD_KEYWORDS)
+            let keywords_field = schema.get_field(FIELD_KEYWORDS)
                 .context("Missing keywords field in schema")?;
 
             // Create document
@@ -260,6 +265,7 @@ impl Bm25StoreTrait for TantivyBm25Store {
             doc.add_text(title_field, &title);
             doc.add_text(summary_field, &summary);
             doc.add_text(content_field, &content);
+            doc.add_text(keywords_field, &keywords);
 
             // Get writer lock
             let mut writer = writer_clone.blocking_lock();
@@ -586,6 +592,7 @@ mod tests {
             "Rust Programming",
             "A guide to Rust",
             "Rust is a systems programming language",
+            "",
         )
         .await
         .expect("Failed to add document");
@@ -596,7 +603,7 @@ mod tests {
 
         assert!(result.is_ok());
         let results = result.unwrap().unwrap();
-        assert!(results.len() > 0);
+        assert!(!results.is_empty());
         assert_eq!(results[0].id, "doc-1");
         assert_eq!(results[0].title, "Rust Programming");
     }
@@ -611,6 +618,7 @@ mod tests {
             "Test Document",
             "Test Summary",
             "Test Content",
+            "",
         )
         .await
         .expect("Failed to add document");
@@ -658,6 +666,7 @@ mod tests {
             "Rust Programming",
             "A comprehensive guide to Rust",
             "Rust is a systems programming language focused on safety and performance",
+            "",
         )
         .await
         .expect("Failed to add document");
@@ -700,5 +709,31 @@ mod tests {
         // Test clamping
         assert_eq!(TantivyBm25Store::normalize_score(100.0).value(), 1.0);
         assert_eq!(TantivyBm25Store::normalize_score(-10.0).value(), 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_get_by_ids_order_preserved() {
+        let (store, _temp_dir) = create_test_store().await;
+
+        // Add 3 documents
+        store.add("doc-1", "Title 1", "Summary 1", "Content 1", "")
+            .await
+            .expect("Failed to add doc-1");
+        store.add("doc-2", "Title 2", "Summary 2", "Content 2", "")
+            .await
+            .expect("Failed to add doc-2");
+        store.add("doc-3", "Title 3", "Summary 3", "Content 3", "")
+            .await
+            .expect("Failed to add doc-3");
+
+        // Request documents in non-sequential order
+        let results = store.get_by_ids(&["doc-3".to_string(), "doc-1".to_string()])
+            .await
+            .expect("Failed to get documents by IDs");
+
+        // Verify order is preserved (matches request order, not sorted)
+        assert_eq!(results.len(), 2, "Should return 2 results");
+        assert_eq!(results[0].as_ref().unwrap().id, "doc-3", "First result should be doc-3");
+        assert_eq!(results[1].as_ref().unwrap().id, "doc-1", "Second result should be doc-1");
     }
 }

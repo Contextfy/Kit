@@ -253,7 +253,7 @@ impl HybridOrchestrator {
         // Add to both stores in parallel
         let (vector_result, bm25_result) = tokio::join!(
             self.vector_store.add(id, content, None),
-            self.bm25_store.add(id, title, summary, content)
+            self.bm25_store.add(id, title, summary, content, "")
         );
 
         // Check for errors
@@ -446,6 +446,7 @@ mod tests {
             _title: &str,
             _summary: &str,
             _content: &str,
+            _keywords: &str,
         ) -> Result<(), AppError> {
             Ok(())
         }
