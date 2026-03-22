@@ -311,22 +311,21 @@ impl Bm25StoreTrait for TantivyBm25Store {
 
             // Delete document by term (returns number of deleted documents)
             let term = tantivy::Term::from_field_text(id_field, &id);
-            let _deleted_count = writer.delete_term(term);
+            let deleted_count = writer.delete_term(term);
 
             // Commit to make deletion visible
             writer.commit()
                 .context("Failed to commit index")?;
 
-            Ok::<bool, anyhow::Error>(true)
+            // Return true if document was found and deleted (deleted_count > 0)
+            Ok::<bool, anyhow::Error>(deleted_count > 0)
         })
         .await
         .map_err(|e| AppError::Infra(InfraError::database(
             "delete task failed",
             Some::<anyhow::Error>(e.into()),
         )))?
-        .map_err(|e| AppError::Infra(InfraError::database("delete failed", Some(e))))?;
-
-        Ok(true)
+        .map_err(|e| AppError::Infra(InfraError::database("delete failed", Some(e))))
     }
 
     /// Check if the store is healthy and accessible

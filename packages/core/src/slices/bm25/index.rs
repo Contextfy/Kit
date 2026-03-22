@@ -63,7 +63,8 @@ pub fn create_bm25_index(directory: Option<&Path>) -> Result<Index> {
         None => Index::create_in_ram(schema),
     };
 
-    // Register Jieba tokenizer for Chinese text segmentation
+    // IMPORTANT: Always register Jieba tokenizer, even when reopening existing index
+    // Tantivy does NOT persist tokenizer registrations, so we must re-register on every startup
     index.tokenizers().register("jieba", JiebaTokenizer {});
 
     Ok(index)
