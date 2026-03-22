@@ -201,8 +201,8 @@ mod tests {
         let schema = index.schema();
         assert!(schema.get_field(FIELD_TITLE).is_ok());
 
-        // Verify index files were created
-        assert!(index_path.exists(), "Index directory should exist");
+        // Verify index files were created (check for Tantivy's core metadata file)
+        assert!(index_path.join("meta.json").exists(), "meta.json should exist after index creation");
     }
 
     #[test]

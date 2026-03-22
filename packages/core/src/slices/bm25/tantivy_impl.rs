@@ -128,13 +128,13 @@ impl Bm25StoreTrait for TantivyBm25Store {
     /// 1. Uses spawn_blocking to avoid blocking Tokio runtime
     /// 2. Performs Tantivy query parsing and BM25 search
     /// 3. Converts results to Bm25Result types with normalized scores
-    /// 4. Returns Ok(Some(vec[])) if no results found (not an error)
+    /// 4. Returns Ok(None) if no results found (not an error)
     async fn search(&self, query: &Query) -> Result<Option<Vec<Bm25Result>>, AppError> {
         let query_text = query.text.trim().to_string();
 
-        // Empty query returns empty results
+        // Empty query returns None (no results, not an error)
         if query_text.is_empty() {
-            return Ok(Some(vec![]));
+            return Ok(None);
         }
 
         // Clone Arc references for the blocking task
@@ -207,7 +207,12 @@ impl Bm25StoreTrait for TantivyBm25Store {
         )))?
         .map_err(|e| AppError::Infra(InfraError::database("search failed", Some(e))))?;
 
-        Ok(Some(search_result))
+        // Return None if no results found, Some(results) otherwise
+        if search_result.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(search_result))
+        }
     }
 
     /// Add a document to the BM25 index
@@ -288,13 +293,15 @@ impl Bm25StoreTrait for TantivyBm25Store {
     ///
     /// # Implementation Notes
     ///
-    /// 1. Uses term-based deletion by ID field
-    /// 2. Returns true if document was found and deleted
-    /// 3. Returns false if document was not found
+    /// 1. Pre-checks if document exists before attempting deletion
+    /// 2. Uses term-based deletion by ID field
+    /// 3. Returns true if document was found and deleted
+    /// 4. Returns false if document was not found (idempotent)
     async fn delete(&self, id: &str) -> Result<bool, AppError> {
         let id = id.to_string();
 
         let writer_clone = Arc::clone(&self.writer);
+        let reader_clone = Arc::clone(&self.reader);
         let index_clone = self.index.clone();
 
         // Use spawn_blocking to avoid blocking Tokio runtime
@@ -306,19 +313,37 @@ impl Bm25StoreTrait for TantivyBm25Store {
             let id_field = schema.get_field(FIELD_ID)
                 .context("Missing id field in schema")?;
 
-            // Get writer lock
+            // CRITICAL: Pre-check if document exists before deletion
+            // writer.delete_term() returns Opstamp, not deletion count
+            // We must search first to determine if document exists
+            reader_clone.reload()
+                .context("Failed to reload index reader")?;
+
+            let searcher = reader_clone.searcher();
+            let term = tantivy::Term::from_field_text(id_field, &id);
+            let term_query = tantivy::query::TermQuery::new(term.clone(), tantivy::schema::IndexRecordOption::Basic);
+
+            // Search for the document (limit to 1 result)
+            let top_docs = searcher.search(&term_query, &tantivy::collector::TopDocs::with_limit(1))
+                .context("Failed to search for document")?;
+
+            // If document doesn't exist, return false (idempotent)
+            if top_docs.is_empty() {
+                return Ok::<bool, anyhow::Error>(false);
+            }
+
+            // Document exists, proceed with deletion
             let mut writer = writer_clone.blocking_lock();
 
-            // Delete document by term (returns number of deleted documents)
-            let term = tantivy::Term::from_field_text(id_field, &id);
-            let deleted_count = writer.delete_term(term);
+            // Delete document by term
+            writer.delete_term(term);
 
             // Commit to make deletion visible
             writer.commit()
                 .context("Failed to commit index")?;
 
-            // Return true if document was found and deleted (deleted_count > 0)
-            Ok::<bool, anyhow::Error>(deleted_count > 0)
+            // Document was found and deleted
+            Ok::<bool, anyhow::Error>(true)
         })
         .await
         .map_err(|e| AppError::Infra(InfraError::database(
@@ -533,8 +558,9 @@ mod tests {
         let result = store.search(&query).await;
 
         assert!(result.is_ok());
-        let results = result.unwrap().unwrap();
-        assert_eq!(results.len(), 0);
+        // Empty query should return None (not Some(vec![]))
+        let results = result.unwrap();
+        assert!(results.is_none(), "Empty query should return None");
     }
 
     #[tokio::test]
@@ -545,8 +571,9 @@ mod tests {
         let result = store.search(&query).await;
 
         assert!(result.is_ok());
-        let results = result.unwrap().unwrap();
-        assert_eq!(results.len(), 0);
+        // No results should return None (not Some(vec![]))
+        let results = result.unwrap();
+        assert!(results.is_none(), "Search with no matches should return None");
     }
 
     #[tokio::test]
@@ -593,10 +620,22 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), true);
 
-        // Search should return no results
+        // Search should return None (no results)
         let query = Query::new("Test", 10);
-        let search_result = store.search(&query).await.unwrap().unwrap();
-        assert_eq!(search_result.len(), 0);
+        let search_result = store.search(&query).await.unwrap();
+        assert!(search_result.is_none(), "Search should return None after deletion");
+    }
+
+    #[tokio::test]
+    async fn test_delete_not_found_returns_false() {
+        let (store, _temp_dir) = create_test_store().await;
+
+        // Try to delete a document that doesn't exist
+        let result = store.delete("missing-id").await;
+        assert!(result.is_ok(), "delete should not error for non-existent document");
+
+        let deleted = result.unwrap();
+        assert!(!deleted, "delete should return false when document does not exist");
     }
 
     #[tokio::test]
