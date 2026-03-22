@@ -19,7 +19,7 @@ use super::schema::{create_bm25_schema, validate_bm25_schema};
 /// - **Filesystem index**: Directory path provided, index persists to disk
 ///
 /// For filesystem indexes, if the directory already contains an index,
-/// it will be opened; otherwise, a new index will be created.
+/// it will be opened and validated; otherwise, a new index will be created.
 ///
 /// # Parameters
 ///
@@ -28,6 +28,13 @@ use super::schema::{create_bm25_schema, validate_bm25_schema};
 /// # Returns
 ///
 /// Returns `Result<Index>` on success, error on failure.
+///
+/// # Errors
+///
+/// Returns error if:
+/// - Opening existing index fails
+/// - Creating new index fails
+/// - Existing index has incompatible schema
 ///
 /// # Examples
 ///
@@ -40,25 +47,37 @@ use super::schema::{create_bm25_schema, validate_bm25_schema};
 /// // Create filesystem index
 /// let index = create_bm25_index(Some(Path::new("/tmp/index"))).unwrap();
 /// ```
-/// This function is public for testing purposes only.
+///
+/// # Architecture Note
+///
+/// This is a low-level internal API used by the facade layer.
+/// Prefer using `SearchEngine::new()` or `build_hybrid_orchestrator()` instead.
 #[doc(hidden)]
 pub fn create_bm25_index(directory: Option<&Path>) -> Result<Index> {
     let schema = create_bm25_schema();
 
     let index = match directory {
         Some(path) => {
-            // Create or open filesystem index
             // Try to open existing index first, create if it doesn't exist
-            Index::open_in_dir(path).or_else(|open_err| {
-                Index::create_in_dir(path, schema.clone()).map_err(|create_err| {
-                    anyhow::anyhow!(
-                        "Failed to open or create index in directory {}: open error: {}, create error: {}",
-                        path.display(),
-                        open_err,
-                        create_err
-                    )
-                })
-            })?
+            match Index::open_in_dir(path) {
+                Ok(idx) => {
+                    // IMPORTANT: Validate schema of existing index to catch incompatibility early
+                    validate_bm25_schema(&idx.schema())
+                        .map_err(|e| anyhow::anyhow!("Existing index has incompatible schema: {}", e))?;
+                    idx
+                }
+                Err(open_err) => {
+                    // Create new index if opening failed
+                    Index::create_in_dir(path, schema).map_err(|create_err| {
+                        anyhow::anyhow!(
+                            "Failed to open or create index in directory {}: open error: {}, create error: {}",
+                            path.display(),
+                            open_err,
+                            create_err
+                        )
+                    })?
+                }
+            }
         }
         None => Index::create_in_ram(schema),
     };
@@ -104,6 +123,13 @@ pub(crate) fn validate_existing_index(directory: &Path) -> Result<()> {
 /// # Returns
 ///
 /// Returns `Result<Index>` on success.
+///
+/// # Errors
+///
+/// Returns error if:
+/// - Opening existing index fails
+/// - Existing index has incompatible schema
+/// - Creating new index fails
 #[allow(dead_code)]
 pub(crate) fn initialize_bm25_index(directory: &Path) -> Result<Index> {
     match Index::open_in_dir(directory) {
@@ -111,10 +137,15 @@ pub(crate) fn initialize_bm25_index(directory: &Path) -> Result<Index> {
             // Validate schema
             validate_bm25_schema(&idx.schema())
                 .map_err(|e| anyhow::anyhow!("Existing index has incompatible schema: {}", e))?;
+
+            // CRITICAL: Re-register Jieba tokenizer after reopening
+            // Tantivy does NOT persist tokenizer registrations
+            idx.tokenizers().register("jieba", JiebaTokenizer {});
+
             Ok(idx)
         }
         Err(_) => {
-            // Create new index
+            // Create new index (which includes tokenizer registration)
             create_bm25_index(Some(directory))
         }
     }
@@ -236,6 +267,41 @@ mod tests {
         // Reopen existing index
         let index2 = initialize_bm25_index(index_path);
         assert!(index2.is_ok(), "Should reopen existing index");
+
+        // CRITICAL: Verify tokenizer is registered after reopening
+        // This is a regression test for the tokenizer re-registration bug
+        let index2 = index2.unwrap();
+        let tokenizer = index2.tokenizers().get("jieba");
+        assert!(
+            tokenizer.is_some(),
+            "Jieba tokenizer MUST be re-registered after reopening existing index"
+        );
+    }
+
+    #[test]
+    fn test_reopen_preserves_tokenizer_registration() {
+        // Regression test: Verify that create_bm25_index re-registers tokenizer on reopen
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let index_path = temp_dir.path();
+
+        // Create index with tokenizer
+        let index1 = create_bm25_index(Some(index_path))
+            .expect("Failed to create index");
+        assert!(
+            index1.tokenizers().get("jieba").is_some(),
+            "Tokenizer should be registered initially"
+        );
+
+        // Reopen index (simulates process restart)
+        let index2 = create_bm25_index(Some(index_path))
+            .expect("Failed to reopen index");
+
+        // CRITICAL: Tokenizer MUST still be registered after reopening
+        // Tantivy does NOT persist tokenizer registrations, so this is required
+        assert!(
+            index2.tokenizers().get("jieba").is_some(),
+            "Tokenizer must be re-registered after reopening (Tantivy doesn't persist it)"
+        );
     }
 
     #[test]
