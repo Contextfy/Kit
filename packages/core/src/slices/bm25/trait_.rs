@@ -175,14 +175,12 @@ pub trait Bm25StoreTrait: Send + Sync {
     ///
     /// # Default Implementation
     ///
-    /// The default implementation calls `get_by_id` for each ID sequentially.
+    /// The default implementation calls `get_by_id` for each ID concurrently.
     /// Implementations may override this to provide batched queries for better performance.
     async fn get_by_ids(&self, ids: &[String]) -> Result<Vec<Option<Bm25Result>>, AppError> {
-        let mut results = Vec::with_capacity(ids.len());
-        for id in ids {
-            results.push(self.get_by_id(id).await?);
-        }
-        Ok(results)
+        use futures::future::try_join_all;
+        let futures = ids.iter().map(|id| self.get_by_id(id));
+        try_join_all(futures).await
     }
 }
 

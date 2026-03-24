@@ -246,9 +246,15 @@ impl HybridOrchestrator {
         content: &str,
         keywords: Option<&str>,
     ) -> Result<(), AppError> {
+        // Construct metadata for vector store with title and summary
+        let metadata = serde_json::json!({
+            "title": title,
+            "summary": summary
+        });
+
         // Add to both stores in parallel
         let (vector_result, bm25_result) = tokio::join!(
-            self.vector_store.add(id, content, None),
+            self.vector_store.add(id, content, Some(&metadata)),
             self.bm25_store.add(id, title, summary, content, keywords.unwrap_or(""))
         );
 

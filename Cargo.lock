@@ -1054,6 +1054,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "fastembed",
+ "futures",
  "lancedb",
  "napi",
  "once_cell",

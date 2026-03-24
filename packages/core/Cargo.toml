@@ -23,6 +23,7 @@ napi = { workspace = true, features = ["napi4", "async"] }
 once_cell = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
+futures = "0.3"
 
 [dev-dependencies]
 tempfile = { workspace = true }
