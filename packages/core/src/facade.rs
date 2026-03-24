@@ -18,6 +18,9 @@ use crate::slices::bm25::trait_::Bm25StoreTrait;
 use crate::slices::vector::VectorStoreTrait;
 use crate::slices::hybrid::HybridOrchestrator;
 
+// Re-export DeleteResult for public API use
+pub use crate::slices::hybrid::DeleteResult;
+
 // Private concrete implementations - invisible to external code
 use crate::slices::bm25::tantivy_impl::TantivyBm25Store;
 use crate::slices::vector::lancedb_impl::LanceDbStore;
@@ -300,9 +303,6 @@ pub struct DocumentDetails {
     /// Full document content
     pub content: String,
 }
-
-// Re-export DeleteResult for public API use
-pub use crate::slices::hybrid::DeleteResult;
 
 #[cfg(test)]
 mod tests {
