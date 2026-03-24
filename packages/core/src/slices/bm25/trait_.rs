@@ -172,7 +172,18 @@ pub trait Bm25StoreTrait: Send + Sync {
     ///
     /// This method should be more efficient than calling `get_by_id` multiple times,
     /// as it can batch the database queries.
-    async fn get_by_ids(&self, ids: &[String]) -> Result<Vec<Option<Bm25Result>>, AppError>;
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation calls `get_by_id` for each ID sequentially.
+    /// Implementations may override this to provide batched queries for better performance.
+    async fn get_by_ids(&self, ids: &[String]) -> Result<Vec<Option<Bm25Result>>, AppError> {
+        let mut results = Vec::with_capacity(ids.len());
+        for id in ids {
+            results.push(self.get_by_id(id).await?);
+        }
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
@@ -210,15 +221,6 @@ mod tests {
 
         async fn get_by_id(&self, _id: &str) -> Result<Option<Bm25Result>, AppError> {
             Ok(None)
-        }
-
-        async fn get_by_ids(&self, ids: &[String]) -> Result<Vec<Option<Bm25Result>>, AppError> {
-            // Default implementation: call get_by_id for each ID (inefficient but works)
-            let mut results = Vec::with_capacity(ids.len());
-            for id in ids {
-                results.push(self.get_by_id(id).await?);
-            }
-            Ok(results)
         }
     }
 

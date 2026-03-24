@@ -101,7 +101,7 @@ pub async fn build() -> Result<()> {
                         // Safe character boundary truncation
                         let summary_truncated = doc.summary.chars().take(200).collect::<String>();
 
-                        if let Err(e) = engine.add(&id, &doc.title, &summary_truncated, &doc.content).await {
+                        if let Err(e) = engine.add(&id, &doc.title, &summary_truncated, &doc.content, None).await {
                             eprintln!("  ✗ Failed to add {}: {}", id, e);
                             parse_errors += 1;
                         } else {
@@ -122,7 +122,8 @@ pub async fn build() -> Result<()> {
                                 &id,
                                 &section.section_title,
                                 &summary_truncated,
-                                &section.content
+                                &section.content,
+                                None,
                             ).await {
                                 eprintln!("  ✗ Failed to add section {}: {}", id, e);
                                 parse_errors += 1;

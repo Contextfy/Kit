@@ -117,7 +117,7 @@ pub async fn build_hybrid_orchestrator(
 ///     ).await?;
 ///
 ///     // Add document
-///     engine.add("doc-id", "Title", "Summary", "Content").await?;
+///     engine.add("doc-id", "Title", "Summary", "Content", None).await?;
 ///
 ///     // Search
 ///     let results = engine.search("query text", 10).await?;
@@ -181,9 +181,10 @@ impl SearchEngine {
     /// * `title` - Document title
     /// * `summary` - Document summary
     /// * `content` - Document content
-    pub async fn add(&self, id: &str, title: &str, summary: &str, content: &str) -> Result<()> {
+    /// * `keywords` - Optional space-separated keywords for boosted BM25 ranking
+    pub async fn add(&self, id: &str, title: &str, summary: &str, content: &str, keywords: Option<&str>) -> Result<()> {
         self.orchestrator
-            .add(id, title, summary, content)
+            .add(id, title, summary, content, keywords)
             .await
             .context("Failed to add document")
     }
@@ -356,6 +357,7 @@ mod tests {
             "Rust Programming",
             "A guide to Rust",
             "Rust is a systems programming language",
+            None,
         ).await.expect("Should add document");
 
         // Search (Note: BM25 index needs commit which is handled internally)

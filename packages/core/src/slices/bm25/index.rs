@@ -152,8 +152,8 @@ mod tests {
         let index1 = create_bm25_index(Some(index_path));
         assert!(index1.is_ok());
 
-        // Reopen existing index
-        let index2 = Index::open_in_dir(index_path);
+        // Reopen existing index using public API to test tokenizer registration flow
+        let index2 = create_bm25_index(Some(index_path));
         assert!(index2.is_ok(), "Should be able to reopen existing index");
 
         let index2 = index2.unwrap();

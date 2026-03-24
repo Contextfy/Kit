@@ -109,7 +109,7 @@ impl HybridOrchestrator {
     ///
     /// # Returns
     ///
-    /// Returns fused and ranked results.
+    /// Returns fused and ranked results. Returns empty Vec if no documents match.
     ///
     /// # Errors
     ///
@@ -169,12 +169,6 @@ impl HybridOrchestrator {
         match (vector_hits, bm25_hits) {
             (Ok(v), Ok(b)) => {
                 // Both searches succeeded - perform RRF fusion
-                if v.is_empty() && b.is_empty() {
-                    return Err(AppError::Domain(DomainError::Other(
-                        "Both BM25 and vector searches returned no results".to_string(),
-                    )));
-                }
-
                 // Fuse results using RRF (no .clone() - move ownership)
                 let fused = if !v.is_empty() && !b.is_empty() {
                     self.rrf.fuse_two(v, b)  // Move ownership, zero copy
@@ -239,6 +233,7 @@ impl HybridOrchestrator {
     /// * `title` - Document title
     /// * `summary` - Document summary
     /// * `content` - Document content
+    /// * `keywords` - Optional space-separated keywords for boosted BM25 ranking
     ///
     /// # Errors
     ///
@@ -249,11 +244,12 @@ impl HybridOrchestrator {
         title: &str,
         summary: &str,
         content: &str,
+        keywords: Option<&str>,
     ) -> Result<(), AppError> {
         // Add to both stores in parallel
         let (vector_result, bm25_result) = tokio::join!(
             self.vector_store.add(id, content, None),
-            self.bm25_store.add(id, title, summary, content, "")
+            self.bm25_store.add(id, title, summary, content, keywords.unwrap_or(""))
         );
 
         // Check for errors
@@ -514,7 +510,7 @@ mod tests {
     #[tokio::test]
     async fn test_hybrid_add() {
         let orchestrator = create_test_orchestrator().await;
-        let result = orchestrator.add("id", "title", "summary", "content").await;
+        let result = orchestrator.add("id", "title", "summary", "content", None).await;
         assert!(result.is_ok());
     }
 
@@ -535,5 +531,73 @@ mod tests {
         let result = orchestrator.health_check().await;
         assert!(result.is_ok());
         assert!(result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_hybrid_search_vector_fails_bm25_succeeds() {
+        // Test degradation: Vector fails, BM25 succeeds
+        let vector_store = Arc::new(MockVectorStore {
+            should_fail: true,
+            empty_results: false,
+        });
+
+        let bm25_store = Arc::new(MockBm25Store {
+            should_fail: false,
+            empty_results: false,
+        });
+
+        let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
+        let query = Query::new("test query", 10);
+
+        let result = orchestrator.search(&query).await;
+        assert!(result.is_ok(), "Should return Ok when BM25 succeeds even if vector fails");
+
+        let hits = result.unwrap();
+        assert!(!hits.is_empty(), "Should return BM25 results");
+        // Should contain BM25 document IDs
+        assert!(hits.iter().any(|h| h.id.starts_with("bm25-doc")), "Should have BM25 results");
+    }
+
+    #[tokio::test]
+    async fn test_hybrid_search_both_empty_returns_empty() {
+        // Test that both stores returning empty is not an error
+        let vector_store = Arc::new(MockVectorStore {
+            should_fail: false,
+            empty_results: true,
+        });
+
+        let bm25_store = Arc::new(MockBm25Store {
+            should_fail: false,
+            empty_results: true,
+        });
+
+        let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
+        let query = Query::new("test query", 10);
+
+        let result = orchestrator.search(&query).await;
+        assert!(result.is_ok(), "Should return Ok when both stores return empty, not an error");
+
+        let hits = result.unwrap();
+        assert!(hits.is_empty(), "Should return empty array when no results found");
+    }
+
+    #[tokio::test]
+    async fn test_hybrid_search_both_fail() {
+        // Test that both stores failing returns an error
+        let vector_store = Arc::new(MockVectorStore {
+            should_fail: true,
+            empty_results: false,
+        });
+
+        let bm25_store = Arc::new(MockBm25Store {
+            should_fail: true,
+            empty_results: false,
+        });
+
+        let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
+        let query = Query::new("test query", 10);
+
+        let result = orchestrator.search(&query).await;
+        assert!(result.is_err(), "Should return error when both stores fail");
     }
 }
