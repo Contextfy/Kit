@@ -3,7 +3,8 @@ pub mod embeddings;
 pub mod facade;
 pub mod kernel;
 pub mod parser;
-pub mod slices;
+// Private implementation module - only specific types are re-exported below
+mod slices;
 
 pub use bridge::{BridgeApi, BridgeError};
 pub use embeddings::EmbeddingModel;

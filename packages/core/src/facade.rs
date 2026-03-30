@@ -250,7 +250,7 @@ impl SearchEngine {
                     id: r.id,
                     title: r.title,
                     summary: r.summary,
-                    content: r.content.unwrap_or_default(),
+                    content: r.content,
                 })
             })
     }
@@ -283,7 +283,7 @@ impl SearchEngine {
                 id: r.id,
                 title: r.title,
                 summary: r.summary,
-                content: r.content.unwrap_or_default(),
+                content: r.content,
             })
         }).collect())
     }
@@ -292,6 +292,9 @@ impl SearchEngine {
 /// Document details with full content
 ///
 /// This struct represents a document with all its fields populated.
+/// The `content` field is Option<String> to transparently reflect the
+/// actual state of the document in the index - if content is missing,
+/// it indicates a potential index corruption or data integrity issue.
 #[derive(Debug, Clone)]
 pub struct DocumentDetails {
     /// Document ID
@@ -300,8 +303,8 @@ pub struct DocumentDetails {
     pub title: String,
     /// Document summary
     pub summary: String,
-    /// Full document content
-    pub content: String,
+    /// Full document content (None indicates data integrity issue)
+    pub content: Option<String>,
 }
 
 #[cfg(test)]

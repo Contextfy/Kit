@@ -187,38 +187,34 @@ impl HybridOrchestrator {
                 Ok(fused)
             }
             (Ok(v), Err(e)) => {
-                // Vector OK, BM25 failed - log warning and return vector results
+                // Vector OK, BM25 failed - log warning and return vector results or error
                 warn!(error = ?e, "BM25 backend failed, using vector results only");
                 if v.is_empty() {
-                    Err(AppError::Domain(DomainError::Other(format!(
-                        "BM25 failed and vector returned no results: {}", e
-                    ))))
+                    // Preserve root cause - don't wrap the error
+                    Err(e)
                 } else {
                     Ok(v)
                 }
             }
             (Err(e), Ok(b)) => {
-                // BM25 OK, Vector failed - log warning and return BM25 results
+                // BM25 OK, Vector failed - log warning and return BM25 results or error
                 warn!(error = ?e, "Vector backend failed, using BM25 results only");
                 if b.is_empty() {
-                    Err(AppError::Domain(DomainError::Other(format!(
-                        "Vector failed and BM25 returned no results: {}", e
-                    ))))
+                    // Preserve root cause - don't wrap the error
+                    Err(e)
                 } else {
                     Ok(b)
                 }
             }
             (Err(vec_err), Err(bm25_err)) => {
-                // Both searches failed - combine errors
+                // Both searches failed - log both and return first error
                 error!(
                     vector_error = ?vec_err,
                     bm25_error = ?bm25_err,
                     "Both search backends failed"
                 );
-                Err(AppError::Domain(DomainError::Other(format!(
-                    "Both searches failed. Vector: {:?}, BM25: {:?}",
-                    vec_err, bm25_err
-                ))))
+                // Return vector error, log that BM25 also failed
+                Err(vec_err)
             }
         }
     }
@@ -258,14 +254,61 @@ impl HybridOrchestrator {
             self.bm25_store.add(id, title, summary, content, keywords.unwrap_or(""))
         );
 
-        // Check for errors
-        let vector_result: Result<(), AppError> = vector_result;
-        let bm25_result: Result<(), AppError> = bm25_result;
-
-        vector_result?;
-        bm25_result?;
-
-        Ok(())
+        // Handle all four states with compensating rollback to prevent orphan documents
+        match (vector_result, bm25_result) {
+            (Ok(()), Ok(())) => {
+                info!(id = %id, "Document added to both stores successfully");
+                Ok(())
+            }
+            (Ok(()), Err(bm25_err)) => {
+                // Vector succeeded but BM25 failed - rollback vector to prevent orphan
+                warn!(
+                    id = %id,
+                    error = ?bm25_err,
+                    "BM25 add failed, attempting vector rollback"
+                );
+                if let Err(rollback_err) = self.vector_store.delete(id).await {
+                    error!(
+                        id = %id,
+                        original_error = ?bm25_err,
+                        rollback_error = ?rollback_err,
+                        "Failed to rollback vector store - orphan document may exist"
+                    );
+                } else {
+                    info!(id = %id, "Vector store rolled back successfully");
+                }
+                Err(bm25_err)
+            }
+            (Err(vector_err), Ok(())) => {
+                // BM25 succeeded but Vector failed - rollback BM25 to prevent orphan
+                warn!(
+                    id = %id,
+                    error = ?vector_err,
+                    "Vector add failed, attempting BM25 rollback"
+                );
+                if let Err(rollback_err) = self.bm25_store.delete(id).await {
+                    error!(
+                        id = %id,
+                        original_error = ?vector_err,
+                        rollback_error = ?rollback_err,
+                        "Failed to rollback BM25 store - orphan document may exist"
+                    );
+                } else {
+                    info!(id = %id, "BM25 store rolled back successfully");
+                }
+                Err(vector_err)
+            }
+            (Err(vector_err), Err(bm25_err)) => {
+                // Both failed - no rollback needed, log and return first error
+                error!(
+                    id = %id,
+                    vector_error = ?vector_err,
+                    bm25_error = ?bm25_err,
+                    "Both stores failed to add document"
+                );
+                Err(vector_err)
+            }
+        }
     }
 
     /// Delete a document from both stores
@@ -375,6 +418,7 @@ mod tests {
     struct MockVectorStore {
         should_fail: bool,
         empty_results: bool,
+        delete_should_fail: bool,
     }
 
     #[async_trait]
@@ -408,7 +452,14 @@ mod tests {
         }
 
         async fn delete(&self, _id: &str) -> Result<bool, AppError> {
-            Ok(true)
+            if self.delete_should_fail {
+                Err(AppError::Infra(InfraError::database(
+                    "mock vector delete failed",
+                    None::<std::io::Error>,
+                )))
+            } else {
+                Ok(true)
+            }
         }
 
         async fn health_check(&self) -> Result<bool, AppError> {
@@ -419,6 +470,7 @@ mod tests {
     struct MockBm25Store {
         should_fail: bool,
         empty_results: bool,
+        delete_should_fail: bool,
     }
 
     #[async_trait]
@@ -454,7 +506,14 @@ mod tests {
         }
 
         async fn delete(&self, _id: &str) -> Result<bool, AppError> {
-            Ok(true)
+            if self.delete_should_fail {
+                Err(AppError::Infra(InfraError::database(
+                    "mock BM25 delete failed",
+                    None::<std::io::Error>,
+                )))
+            } else {
+                Ok(true)
+            }
         }
 
         async fn health_check(&self) -> Result<bool, AppError> {
@@ -475,11 +534,13 @@ mod tests {
         let vector_store = Arc::new(MockVectorStore {
             should_fail: false,
             empty_results: false,
+            delete_should_fail: false,
         });
 
         let bm25_store = Arc::new(MockBm25Store {
             should_fail: false,
             empty_results: false,
+            delete_should_fail: false,
         });
 
         HybridOrchestrator::default_with_stores(vector_store, bm25_store)
@@ -545,11 +606,13 @@ mod tests {
         let vector_store = Arc::new(MockVectorStore {
             should_fail: true,
             empty_results: false,
+            delete_should_fail: false,
         });
 
         let bm25_store = Arc::new(MockBm25Store {
             should_fail: false,
             empty_results: false,
+            delete_should_fail: false,
         });
 
         let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
@@ -570,11 +633,13 @@ mod tests {
         let vector_store = Arc::new(MockVectorStore {
             should_fail: false,
             empty_results: true,
+            delete_should_fail: false,
         });
 
         let bm25_store = Arc::new(MockBm25Store {
             should_fail: false,
             empty_results: true,
+            delete_should_fail: false,
         });
 
         let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
@@ -593,11 +658,13 @@ mod tests {
         let vector_store = Arc::new(MockVectorStore {
             should_fail: true,
             empty_results: false,
+            delete_should_fail: false,
         });
 
         let bm25_store = Arc::new(MockBm25Store {
             should_fail: true,
             empty_results: false,
+            delete_should_fail: false,
         });
 
         let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
@@ -605,5 +672,57 @@ mod tests {
 
         let result = orchestrator.search(&query).await;
         assert!(result.is_err(), "Should return error when both stores fail");
+    }
+
+    #[tokio::test]
+    async fn test_hybrid_delete_vector_fails_bm25_succeeds() {
+        // Test delete failure: Vector fails, BM25 succeeds
+        let vector_store = Arc::new(MockVectorStore {
+            should_fail: false,
+            empty_results: false,
+            delete_should_fail: true,
+        });
+
+        let bm25_store = Arc::new(MockBm25Store {
+            should_fail: false,
+            empty_results: false,
+            delete_should_fail: false,
+        });
+
+        let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
+        let result = orchestrator.delete("test-id").await;
+
+        assert!(!result.both_success(), "Should not have both success when vector fails");
+        assert!(result.any_success(), "Should have BM25 success");
+        assert!(result.first_error().is_some(), "Should have vector error");
+
+        assert!(matches!(result.vector_deleted, Err(_)), "Vector delete should fail");
+        assert!(matches!(result.bm25_deleted, Ok(true)), "BM25 delete should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_hybrid_delete_bm25_fails_vector_succeeds() {
+        // Test delete failure: BM25 fails, Vector succeeds
+        let vector_store = Arc::new(MockVectorStore {
+            should_fail: false,
+            empty_results: false,
+            delete_should_fail: false,
+        });
+
+        let bm25_store = Arc::new(MockBm25Store {
+            should_fail: false,
+            empty_results: false,
+            delete_should_fail: true,
+        });
+
+        let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
+        let result = orchestrator.delete("test-id").await;
+
+        assert!(!result.both_success(), "Should not have both success when BM25 fails");
+        assert!(result.any_success(), "Should have vector success");
+        assert!(result.first_error().is_some(), "Should have BM25 error");
+
+        assert!(matches!(result.vector_deleted, Ok(true)), "Vector delete should succeed");
+        assert!(matches!(result.bm25_deleted, Err(_)), "BM25 delete should fail");
     }
 }
