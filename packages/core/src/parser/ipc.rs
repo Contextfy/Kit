@@ -34,8 +34,8 @@
 
 use crate::kernel::types::AstChunk;
 use anyhow::{Context, Result};
-use std::io::BufRead;
-use std::process::{Child, Command, Stdio};
+use std::io::{BufRead, Read};
+use std::process::{Child, ChildStderr, Command, Stdio};
 
 /// IPC-specific errors
 ///
@@ -59,9 +59,10 @@ pub enum IpcError {
     },
 
     /// Child process exited abnormally
-    #[error("Child process exited abnormally: exit_code={exit_code:?}")]
+    #[error("Child process exited abnormally: exit_code={exit_code:?}, stderr='{stderr}'")]
     ChildExitedAbnormally {
         exit_code: Option<i32>,
+        stderr: String,
     },
 }
 
@@ -71,6 +72,7 @@ pub enum IpcError {
 pub struct SidecarIPC {
     child: Child,
     stdout: std::io::BufReader<std::process::ChildStdout>,
+    stderr: Option<ChildStderr>,
     line_number: usize,
 }
 
@@ -123,7 +125,7 @@ impl SidecarIPC {
         let mut cmd = Command::new(&program);
         cmd.args(&full_args);
         cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::inherit());
+        cmd.stderr(Stdio::piped());
 
         // Spawn child process
         let mut child = cmd.spawn().map_err(|e| IpcError::ChildStartFailed {
@@ -131,7 +133,7 @@ impl SidecarIPC {
             cause: e.to_string(),
         })?;
 
-        // Extract stdout handle using take() to avoid partial move
+        // Extract stdout and stderr handles using take() to avoid partial move
         let stdout = child.stdout.take().ok_or_else(|| {
             anyhow::anyhow!(IpcError::ChildStartFailed {
                 command: format!("{} {:?}", program, full_args),
@@ -139,9 +141,12 @@ impl SidecarIPC {
             })
         })?;
 
+        let stderr = child.stderr.take();
+
         Ok(Self {
             child,
             stdout: std::io::BufReader::new(stdout),
+            stderr,
             line_number: 0,
         })
     }
@@ -211,8 +216,20 @@ impl SidecarIPC {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if exit code is non-zero.
+    /// Returns `Err` if exit code is non-zero or stderr read fails.
     pub fn wait(&mut self) -> Result<()> {
+        // Collect stderr if available BEFORE calling child.wait()
+        // to prevent deadlock if stderr buffer is full
+        let stderr = if let Some(mut stderr_handle) = self.stderr.take() {
+            let mut stderr_output = String::new();
+            stderr_handle
+                .read_to_string(&mut stderr_output)
+                .context("Failed to read stderr")?;
+            Some(stderr_output)
+        } else {
+            None
+        };
+
         // Wait for child to exit
         let status = self
             .child
@@ -223,6 +240,7 @@ impl SidecarIPC {
         if !status.success() {
             return Err(anyhow::anyhow!(IpcError::ChildExitedAbnormally {
                 exit_code: status.code(),
+                stderr: stderr.unwrap_or_default(),
             }));
         }
 
