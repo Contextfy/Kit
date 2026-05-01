@@ -1,3 +1,4 @@
+use anyhow::{Context, Result as AnyhowResult};
 /// Tantivy implementation of Bm25StoreTrait
 ///
 /// This module provides the concrete Tantivy backend for BM25 full-text search.
@@ -5,24 +6,22 @@
 /// types isolated within this module.
 ///
 /// Ref: `openspec/changes/refactor-pragmatic-slice-architecture/design.md` - Rule 2
-
 use async_trait::async_trait;
-use anyhow::{Context, Result as AnyhowResult};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tantivy::{
     collector::TopDocs,
     query::QueryParser,
     schema::{Field, TantivyDocument, Value},
     Index, IndexReader, IndexWriter,
 };
+use tokio::sync::Mutex;
 
-use crate::kernel::types::{Query, Score};
 use crate::kernel::errors::{AppError, InfraError};
+use crate::kernel::types::{Query, Score};
 
-use super::trait_::{Bm25StoreTrait, Bm25Result};
-use super::schema::{FIELD_ID, FIELD_TITLE, FIELD_SUMMARY, FIELD_CONTENT, FIELD_KEYWORDS};
 use super::index::{create_bm25_index, create_index_reader};
+use super::schema::{FIELD_CONTENT, FIELD_ID, FIELD_KEYWORDS, FIELD_SUMMARY, FIELD_TITLE};
+use super::trait_::{Bm25Result, Bm25StoreTrait};
 
 // TODO(BM25-Tuning): The hardcoded BM25_MAX_SCORE of 20.0 can compress/clip real BM25 scores
 // on different corpora. Consider making this a configurable parameter via env vars,
@@ -73,8 +72,7 @@ impl TantivyBm25Store {
             .context("Failed to create index writer")?;
 
         // Create index reader
-        let reader = create_index_reader(&index)
-            .context("Failed to create index reader")?;
+        let reader = create_index_reader(&index).context("Failed to create index reader")?;
 
         Ok(Self {
             index,
@@ -148,7 +146,8 @@ impl Bm25StoreTrait for TantivyBm25Store {
         // Use spawn_blocking to avoid blocking Tokio runtime
         let search_result = tokio::task::spawn_blocking(move || {
             // Reload reader to get latest commits
-            reader_clone.reload()
+            reader_clone
+                .reload()
                 .context("Failed to reload index reader")?;
 
             // Get searcher snapshot
@@ -156,13 +155,17 @@ impl Bm25StoreTrait for TantivyBm25Store {
 
             // Create query parser
             let schema = index_clone.schema();
-            let title_field = schema.get_field(FIELD_TITLE)
+            let title_field = schema
+                .get_field(FIELD_TITLE)
                 .context("Missing title field in schema")?;
-            let summary_field = schema.get_field(FIELD_SUMMARY)
+            let summary_field = schema
+                .get_field(FIELD_SUMMARY)
                 .context("Missing summary field in schema")?;
-            let content_field = schema.get_field(FIELD_CONTENT)
+            let content_field = schema
+                .get_field(FIELD_CONTENT)
                 .context("Missing content field in schema")?;
-            let keywords_field = schema.get_field(FIELD_KEYWORDS)
+            let keywords_field = schema
+                .get_field(FIELD_KEYWORDS)
                 .context("Missing keywords field in schema")?;
 
             let mut query_parser = QueryParser::for_index(
@@ -172,25 +175,31 @@ impl Bm25StoreTrait for TantivyBm25Store {
             query_parser.set_field_boost(keywords_field, 5.0);
 
             // Parse query
-            let parsed_query = query_parser.parse_query(&query_text)
+            let parsed_query = query_parser
+                .parse_query(&query_text)
                 .with_context(|| format!("Failed to parse query: {}", query_text))?;
 
             // Execute search with TopDocs collector
-            let top_docs = searcher.search(&parsed_query, &TopDocs::with_limit(limit))
+            let top_docs = searcher
+                .search(&parsed_query, &TopDocs::with_limit(limit))
                 .context("Failed to execute search")?;
 
             // Extract field references for result conversion
-            let id_field = schema.get_field(FIELD_ID)
+            let id_field = schema
+                .get_field(FIELD_ID)
                 .context("Missing id field in schema")?;
-            let title_field = schema.get_field(FIELD_TITLE)
+            let title_field = schema
+                .get_field(FIELD_TITLE)
                 .context("Missing title field in schema")?;
-            let summary_field = schema.get_field(FIELD_SUMMARY)
+            let summary_field = schema
+                .get_field(FIELD_SUMMARY)
                 .context("Missing summary field in schema")?;
 
             // Convert search results
             let mut results = Vec::new();
             for (bm25_score, doc_address) in top_docs {
-                let retrieved_doc = searcher.doc(doc_address)
+                let retrieved_doc = searcher
+                    .doc(doc_address)
                     .context("Failed to retrieve document")?;
 
                 let id = Self::extract_text_value(&retrieved_doc, id_field);
@@ -204,10 +213,12 @@ impl Bm25StoreTrait for TantivyBm25Store {
             Ok::<Vec<Bm25Result>, anyhow::Error>(results)
         })
         .await
-        .map_err(|e| AppError::Infra(InfraError::database(
-            "search task failed",
-            Some::<anyhow::Error>(e.into()),
-        )))?
+        .map_err(|e| {
+            AppError::Infra(InfraError::database(
+                "search task failed",
+                Some::<anyhow::Error>(e.into()),
+            ))
+        })?
         .map_err(|e| AppError::Infra(InfraError::database("search failed", Some(e))))?;
 
         // Return None if no results found, Some(results) otherwise
@@ -248,15 +259,20 @@ impl Bm25StoreTrait for TantivyBm25Store {
             let schema = index_clone.schema();
 
             // Get field references
-            let id_field = schema.get_field(FIELD_ID)
+            let id_field = schema
+                .get_field(FIELD_ID)
                 .context("Missing id field in schema")?;
-            let title_field = schema.get_field(FIELD_TITLE)
+            let title_field = schema
+                .get_field(FIELD_TITLE)
                 .context("Missing title field in schema")?;
-            let summary_field = schema.get_field(FIELD_SUMMARY)
+            let summary_field = schema
+                .get_field(FIELD_SUMMARY)
                 .context("Missing summary field in schema")?;
-            let content_field = schema.get_field(FIELD_CONTENT)
+            let content_field = schema
+                .get_field(FIELD_CONTENT)
                 .context("Missing content field in schema")?;
-            let keywords_field = schema.get_field(FIELD_KEYWORDS)
+            let keywords_field = schema
+                .get_field(FIELD_KEYWORDS)
                 .context("Missing keywords field in schema")?;
 
             // Create document
@@ -276,20 +292,22 @@ impl Bm25StoreTrait for TantivyBm25Store {
             writer.delete_term(term);
 
             // Add new document to index
-            writer.add_document(doc)
+            writer
+                .add_document(doc)
                 .context("Failed to add document to index")?;
 
             // Commit to make document searchable
-            writer.commit()
-                .context("Failed to commit index")?;
+            writer.commit().context("Failed to commit index")?;
 
             Ok::<(), anyhow::Error>(())
         })
         .await
-        .map_err(|e| AppError::Infra(InfraError::database(
-            "add task failed",
-            Some::<anyhow::Error>(e.into()),
-        )))?
+        .map_err(|e| {
+            AppError::Infra(InfraError::database(
+                "add task failed",
+                Some::<anyhow::Error>(e.into()),
+            ))
+        })?
         .map_err(|e| AppError::Infra(InfraError::database("add failed", Some(e))))?;
 
         Ok(())
@@ -316,21 +334,27 @@ impl Bm25StoreTrait for TantivyBm25Store {
             let schema = index_clone.schema();
 
             // Get ID field
-            let id_field = schema.get_field(FIELD_ID)
+            let id_field = schema
+                .get_field(FIELD_ID)
                 .context("Missing id field in schema")?;
 
             // CRITICAL: Pre-check if document exists before deletion
             // writer.delete_term() returns Opstamp, not deletion count
             // We must search first to determine if document exists
-            reader_clone.reload()
+            reader_clone
+                .reload()
                 .context("Failed to reload index reader")?;
 
             let searcher = reader_clone.searcher();
             let term = tantivy::Term::from_field_text(id_field, &id);
-            let term_query = tantivy::query::TermQuery::new(term.clone(), tantivy::schema::IndexRecordOption::Basic);
+            let term_query = tantivy::query::TermQuery::new(
+                term.clone(),
+                tantivy::schema::IndexRecordOption::Basic,
+            );
 
             // Search for the document (limit to 1 result)
-            let top_docs = searcher.search(&term_query, &tantivy::collector::TopDocs::with_limit(1))
+            let top_docs = searcher
+                .search(&term_query, &tantivy::collector::TopDocs::with_limit(1))
                 .context("Failed to search for document")?;
 
             // If document doesn't exist, return false (idempotent)
@@ -345,17 +369,18 @@ impl Bm25StoreTrait for TantivyBm25Store {
             writer.delete_term(term);
 
             // Commit to make deletion visible
-            writer.commit()
-                .context("Failed to commit index")?;
+            writer.commit().context("Failed to commit index")?;
 
             // Document was found and deleted
             Ok::<bool, anyhow::Error>(true)
         })
         .await
-        .map_err(|e| AppError::Infra(InfraError::database(
-            "delete task failed",
-            Some::<anyhow::Error>(e.into()),
-        )))?
+        .map_err(|e| {
+            AppError::Infra(InfraError::database(
+                "delete task failed",
+                Some::<anyhow::Error>(e.into()),
+            ))
+        })?
         .map_err(|e| AppError::Infra(InfraError::database("delete failed", Some(e))))
     }
 
@@ -369,15 +394,18 @@ impl Bm25StoreTrait for TantivyBm25Store {
 
         // Use spawn_blocking to avoid blocking Tokio runtime
         tokio::task::spawn_blocking(move || {
-            reader_clone.reload()
+            reader_clone
+                .reload()
                 .context("Failed to reload index reader")?;
             Ok::<bool, anyhow::Error>(true)
         })
         .await
-        .map_err(|e| AppError::Infra(InfraError::database(
-            "health check task failed",
-            Some::<anyhow::Error>(e.into()),
-        )))?
+        .map_err(|e| {
+            AppError::Infra(InfraError::database(
+                "health check task failed",
+                Some::<anyhow::Error>(e.into()),
+            ))
+        })?
         .map_err(|e| AppError::Infra(InfraError::database("health check failed", Some(e))))?;
 
         Ok(true)
@@ -399,7 +427,8 @@ impl Bm25StoreTrait for TantivyBm25Store {
         // Use spawn_blocking to avoid blocking Tokio runtime
         let get_result = tokio::task::spawn_blocking(move || {
             // Reload reader to get latest commits
-            reader_clone.reload()
+            reader_clone
+                .reload()
                 .context("Failed to reload index reader")?;
 
             // Get searcher snapshot
@@ -409,21 +438,27 @@ impl Bm25StoreTrait for TantivyBm25Store {
             let schema = index_clone.schema();
 
             // Get field references
-            let id_field = schema.get_field(FIELD_ID)
+            let id_field = schema
+                .get_field(FIELD_ID)
                 .context("Missing id field in schema")?;
-            let title_field = schema.get_field(FIELD_TITLE)
+            let title_field = schema
+                .get_field(FIELD_TITLE)
                 .context("Missing title field in schema")?;
-            let summary_field = schema.get_field(FIELD_SUMMARY)
+            let summary_field = schema
+                .get_field(FIELD_SUMMARY)
                 .context("Missing summary field in schema")?;
-            let content_field = schema.get_field(FIELD_CONTENT)
+            let content_field = schema
+                .get_field(FIELD_CONTENT)
                 .context("Missing content field in schema")?;
 
             // Create query for exact ID match
             let term = tantivy::Term::from_field_text(id_field, &id);
-            let query = tantivy::query::TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic);
+            let query =
+                tantivy::query::TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic);
 
             // Execute search
-            let top_docs = searcher.search(&query, &tantivy::collector::TopDocs::with_limit(1))
+            let top_docs = searcher
+                .search(&query, &tantivy::collector::TopDocs::with_limit(1))
                 .context("Failed to execute search")?;
 
             // Check if document was found
@@ -433,7 +468,8 @@ impl Bm25StoreTrait for TantivyBm25Store {
 
             // Get the first (and only) result
             let (_score, doc_address) = &top_docs[0];
-            let retrieved_doc = searcher.doc(*doc_address)
+            let retrieved_doc = searcher
+                .doc(*doc_address)
                 .context("Failed to retrieve document")?;
 
             // Extract document fields
@@ -443,13 +479,21 @@ impl Bm25StoreTrait for TantivyBm25Store {
             let content = Self::extract_text_value(&retrieved_doc, content_field);
 
             // Return result with content and default score (not relevant for get_by_id)
-            Ok(Some(Bm25Result::with_content(doc_id, title, summary, content, Score::new(1.0))))
+            Ok(Some(Bm25Result::with_content(
+                doc_id,
+                title,
+                summary,
+                content,
+                Score::new(1.0),
+            )))
         })
         .await
-        .map_err(|e| AppError::Infra(InfraError::database(
-            "get_by_id task failed",
-            Some::<anyhow::Error>(e.into()),
-        )))?
+        .map_err(|e| {
+            AppError::Infra(InfraError::database(
+                "get_by_id task failed",
+                Some::<anyhow::Error>(e.into()),
+            ))
+        })?
         .map_err(|e| AppError::Infra(InfraError::database("get_by_id failed", Some(e))))?;
 
         Ok(get_result)
@@ -470,7 +514,8 @@ impl Bm25StoreTrait for TantivyBm25Store {
         // Use spawn_blocking to avoid blocking Tokio runtime
         let get_results = tokio::task::spawn_blocking(move || {
             // Reload reader to get latest commits
-            reader_clone.reload()
+            reader_clone
+                .reload()
                 .context("Failed to reload index reader")?;
 
             // Get searcher snapshot
@@ -480,13 +525,17 @@ impl Bm25StoreTrait for TantivyBm25Store {
             let schema = index_clone.schema();
 
             // Get field references
-            let id_field = schema.get_field(FIELD_ID)
+            let id_field = schema
+                .get_field(FIELD_ID)
                 .context("Missing id field in schema")?;
-            let title_field = schema.get_field(FIELD_TITLE)
+            let title_field = schema
+                .get_field(FIELD_TITLE)
                 .context("Missing title field in schema")?;
-            let summary_field = schema.get_field(FIELD_SUMMARY)
+            let summary_field = schema
+                .get_field(FIELD_SUMMARY)
                 .context("Missing summary field in schema")?;
-            let content_field = schema.get_field(FIELD_CONTENT)
+            let content_field = schema
+                .get_field(FIELD_CONTENT)
                 .context("Missing content field in schema")?;
 
             let mut results = Vec::with_capacity(ids.len());
@@ -495,19 +544,28 @@ impl Bm25StoreTrait for TantivyBm25Store {
             let mut terms: Vec<Box<dyn tantivy::query::Query>> = Vec::new();
             for id in &ids {
                 let term = tantivy::Term::from_field_text(id_field, id);
-                terms.push(Box::new(tantivy::query::TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic)));
+                terms.push(Box::new(tantivy::query::TermQuery::new(
+                    term,
+                    tantivy::schema::IndexRecordOption::Basic,
+                )));
             }
 
             // Use OR query to match any of the IDs
             let boolean_query = tantivy::query::BooleanQuery::union(terms);
-            let top_docs = searcher.search(&boolean_query, &tantivy::collector::TopDocs::with_limit(ids.len()))
+            let top_docs = searcher
+                .search(
+                    &boolean_query,
+                    &tantivy::collector::TopDocs::with_limit(ids.len()),
+                )
                 .context("Failed to execute batch search")?;
 
             // Build a map of ID -> document for quick lookup
-            let mut doc_map: std::collections::HashMap<String, Bm25Result> = std::collections::HashMap::new();
+            let mut doc_map: std::collections::HashMap<String, Bm25Result> =
+                std::collections::HashMap::new();
 
             for (_score, doc_address) in top_docs {
-                let retrieved_doc = searcher.doc(doc_address)
+                let retrieved_doc = searcher
+                    .doc(doc_address)
                     .context("Failed to retrieve document")?;
 
                 let doc_id = Self::extract_text_value(&retrieved_doc, id_field);
@@ -515,7 +573,10 @@ impl Bm25StoreTrait for TantivyBm25Store {
                 let summary = Self::extract_text_value(&retrieved_doc, summary_field);
                 let content = Self::extract_text_value(&retrieved_doc, content_field);
 
-                doc_map.insert(doc_id.clone(), Bm25Result::with_content(doc_id, title, summary, content, Score::new(1.0)));
+                doc_map.insert(
+                    doc_id.clone(),
+                    Bm25Result::with_content(doc_id, title, summary, content, Score::new(1.0)),
+                );
             }
 
             // Return results in the same order as input IDs
@@ -526,10 +587,12 @@ impl Bm25StoreTrait for TantivyBm25Store {
             Ok::<Vec<Option<Bm25Result>>, anyhow::Error>(results)
         })
         .await
-        .map_err(|e| AppError::Infra(InfraError::database(
-            "get_by_ids task failed",
-            Some::<anyhow::Error>(e.into()),
-        )))?
+        .map_err(|e| {
+            AppError::Infra(InfraError::database(
+                "get_by_ids task failed",
+                Some::<anyhow::Error>(e.into()),
+            ))
+        })?
         .map_err(|e| AppError::Infra(InfraError::database("get_by_ids failed", Some(e))))?;
 
         Ok(get_results)
@@ -543,8 +606,8 @@ mod tests {
     /// Helper to create a test store
     async fn create_test_store() -> (TantivyBm25Store, tempfile::TempDir) {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
-        let store = TantivyBm25Store::from_directory(temp_dir.path())
-            .expect("Failed to create store");
+        let store =
+            TantivyBm25Store::from_directory(temp_dir.path()).expect("Failed to create store");
 
         (store, temp_dir)
     }
@@ -579,7 +642,10 @@ mod tests {
         assert!(result.is_ok());
         // No results should return None (not Some(vec![]))
         let results = result.unwrap();
-        assert!(results.is_none(), "Search with no matches should return None");
+        assert!(
+            results.is_none(),
+            "Search with no matches should return None"
+        );
     }
 
     #[tokio::test]
@@ -587,15 +653,16 @@ mod tests {
         let (store, _temp_dir) = create_test_store().await;
 
         // Add a document
-        store.add(
-            "doc-1",
-            "Rust Programming",
-            "A guide to Rust",
-            "Rust is a systems programming language",
-            "",
-        )
-        .await
-        .expect("Failed to add document");
+        store
+            .add(
+                "doc-1",
+                "Rust Programming",
+                "A guide to Rust",
+                "Rust is a systems programming language",
+                "",
+            )
+            .await
+            .expect("Failed to add document");
 
         // Search for it
         let query = Query::new("Rust", 10);
@@ -613,15 +680,10 @@ mod tests {
         let (store, _temp_dir) = create_test_store().await;
 
         // Add a document
-        store.add(
-            "doc-1",
-            "Test Document",
-            "Test Summary",
-            "Test Content",
-            "",
-        )
-        .await
-        .expect("Failed to add document");
+        store
+            .add("doc-1", "Test Document", "Test Summary", "Test Content", "")
+            .await
+            .expect("Failed to add document");
 
         // Delete it
         let result = store.delete("doc-1").await;
@@ -631,7 +693,10 @@ mod tests {
         // Search should return None (no results)
         let query = Query::new("Test", 10);
         let search_result = store.search(&query).await.unwrap();
-        assert!(search_result.is_none(), "Search should return None after deletion");
+        assert!(
+            search_result.is_none(),
+            "Search should return None after deletion"
+        );
     }
 
     #[tokio::test]
@@ -640,10 +705,16 @@ mod tests {
 
         // Try to delete a document that doesn't exist
         let result = store.delete("missing-id").await;
-        assert!(result.is_ok(), "delete should not error for non-existent document");
+        assert!(
+            result.is_ok(),
+            "delete should not error for non-existent document"
+        );
 
         let deleted = result.unwrap();
-        assert!(!deleted, "delete should return false when document does not exist");
+        assert!(
+            !deleted,
+            "delete should return false when document does not exist"
+        );
     }
 
     #[tokio::test]
@@ -661,15 +732,16 @@ mod tests {
         let (store, _temp_dir) = create_test_store().await;
 
         // Add a document
-        store.add(
-            "doc-1",
-            "Rust Programming",
-            "A comprehensive guide to Rust",
-            "Rust is a systems programming language focused on safety and performance",
-            "",
-        )
-        .await
-        .expect("Failed to add document");
+        store
+            .add(
+                "doc-1",
+                "Rust Programming",
+                "A comprehensive guide to Rust",
+                "Rust is a systems programming language focused on safety and performance",
+                "",
+            )
+            .await
+            .expect("Failed to add document");
 
         // Get the document by ID
         let result = store.get_by_id("doc-1").await;
@@ -684,7 +756,10 @@ mod tests {
         assert_eq!(doc.summary, "A comprehensive guide to Rust");
         assert_eq!(
             doc.content,
-            Some("Rust is a systems programming language focused on safety and performance".to_string())
+            Some(
+                "Rust is a systems programming language focused on safety and performance"
+                    .to_string()
+            )
         );
     }
 
@@ -716,24 +791,36 @@ mod tests {
         let (store, _temp_dir) = create_test_store().await;
 
         // Add 3 documents
-        store.add("doc-1", "Title 1", "Summary 1", "Content 1", "")
+        store
+            .add("doc-1", "Title 1", "Summary 1", "Content 1", "")
             .await
             .expect("Failed to add doc-1");
-        store.add("doc-2", "Title 2", "Summary 2", "Content 2", "")
+        store
+            .add("doc-2", "Title 2", "Summary 2", "Content 2", "")
             .await
             .expect("Failed to add doc-2");
-        store.add("doc-3", "Title 3", "Summary 3", "Content 3", "")
+        store
+            .add("doc-3", "Title 3", "Summary 3", "Content 3", "")
             .await
             .expect("Failed to add doc-3");
 
         // Request documents in non-sequential order
-        let results = store.get_by_ids(&["doc-3".to_string(), "doc-1".to_string()])
+        let results = store
+            .get_by_ids(&["doc-3".to_string(), "doc-1".to_string()])
             .await
             .expect("Failed to get documents by IDs");
 
         // Verify order is preserved (matches request order, not sorted)
         assert_eq!(results.len(), 2, "Should return 2 results");
-        assert_eq!(results[0].as_ref().unwrap().id, "doc-3", "First result should be doc-3");
-        assert_eq!(results[1].as_ref().unwrap().id, "doc-1", "Second result should be doc-1");
+        assert_eq!(
+            results[0].as_ref().unwrap().id,
+            "doc-3",
+            "First result should be doc-3"
+        );
+        assert_eq!(
+            results[1].as_ref().unwrap().id,
+            "doc-1",
+            "Second result should be doc-1"
+        );
     }
 }

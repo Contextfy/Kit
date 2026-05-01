@@ -1,3 +1,4 @@
+use anyhow::{Context, Result as AnyhowResult};
 /// LanceDB implementation of VectorStoreTrait
 ///
 /// This module provides the concrete LanceDB backend for vector storage.
@@ -5,14 +6,12 @@
 /// types isolated within this module.
 ///
 /// Ref: `openspec/changes/refactor-pragmatic-slice-architecture/design.md` - Rule 2
-
 use async_trait::async_trait;
-use anyhow::{Context, Result as AnyhowResult};
 use lancedb::connection::Connection as LanceConnection;
 use lancedb::table::Table as LanceTable;
 
-use crate::kernel::types::{Query, Hit, Score};
 use crate::kernel::errors::{AppError, InfraError};
+use crate::kernel::types::{Hit, Query, Score};
 
 use super::trait_::VectorStoreTrait;
 
@@ -239,15 +238,12 @@ impl VectorStoreTrait for LanceDbStore {
     ///
     /// Verifies connection is active and table exists.
     async fn health_check(&self) -> Result<bool, AppError> {
-        self.get_table()
-            .await
-            .map(|_| true)
-            .map_err(|e| {
-                AppError::Infra(InfraError::database(
-                    "health check failed",
-                    Some::<anyhow::Error>(e),
-                ))
-            })
+        self.get_table().await.map(|_| true).map_err(|e| {
+            AppError::Infra(InfraError::database(
+                "health check failed",
+                Some::<anyhow::Error>(e),
+            ))
+        })
     }
 }
 
@@ -262,9 +258,7 @@ mod tests {
         let db_uri = temp_dir.path().to_str().expect("Invalid path");
         let table_name = "test_knowledge";
 
-        let conn = connect(db_uri)
-            .await
-            .expect("Failed to connect to LanceDB");
+        let conn = connect(db_uri).await.expect("Failed to connect to LanceDB");
 
         create_table_if_not_exists(&conn, table_name)
             .await
@@ -298,9 +292,7 @@ mod tests {
     async fn test_add_placeholder() {
         let (store, _temp_dir) = create_test_store().await;
 
-        let result = store
-            .add("doc1", "test content", None)
-            .await;
+        let result = store.add("doc1", "test content", None).await;
 
         assert!(result.is_ok());
     }
@@ -330,9 +322,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let db_uri = temp_dir.path().to_str().expect("Invalid path");
 
-        let conn = connect(db_uri)
-            .await
-            .expect("Failed to connect");
+        let conn = connect(db_uri).await.expect("Failed to connect");
 
         // Create store with non-existent table
         let store = LanceDbStore::new(conn, "nonexistent_table");
@@ -351,19 +341,34 @@ mod tests {
         // Test cosine distance normalization
         // Cosine distance range: [0.0, 2.0]
         // 0.0 distance → 1.0 score (perfect match)
-        assert_eq!(LanceDbStore::normalize_score(0.0, DistanceMetric::Cosine).value(), 1.0);
+        assert_eq!(
+            LanceDbStore::normalize_score(0.0, DistanceMetric::Cosine).value(),
+            1.0
+        );
 
         // 1.0 distance → 0.5 score
-        assert_eq!(LanceDbStore::normalize_score(1.0, DistanceMetric::Cosine).value(), 0.5);
+        assert_eq!(
+            LanceDbStore::normalize_score(1.0, DistanceMetric::Cosine).value(),
+            0.5
+        );
 
         // 2.0 distance → 0.0 score (worst match)
-        assert_eq!(LanceDbStore::normalize_score(2.0, DistanceMetric::Cosine).value(), 0.0);
+        assert_eq!(
+            LanceDbStore::normalize_score(2.0, DistanceMetric::Cosine).value(),
+            0.0
+        );
 
         // Clamping test: value > 2.0 should be clamped to 0.0
-        assert_eq!(LanceDbStore::normalize_score(3.0, DistanceMetric::Cosine).value(), 0.0);
+        assert_eq!(
+            LanceDbStore::normalize_score(3.0, DistanceMetric::Cosine).value(),
+            0.0
+        );
 
         // Clamping test: value < 0.0 should be clamped to 1.0
-        assert_eq!(LanceDbStore::normalize_score(-0.5, DistanceMetric::Cosine).value(), 1.0);
+        assert_eq!(
+            LanceDbStore::normalize_score(-0.5, DistanceMetric::Cosine).value(),
+            1.0
+        );
     }
 
     #[test]
@@ -371,10 +376,16 @@ mod tests {
         // Test L2 distance normalization
         // L2 distance range: [0.0, +infinity)
         // 0.0 distance → 1.0 score (perfect match)
-        assert!((LanceDbStore::normalize_score(0.0, DistanceMetric::L2).value() - 1.0).abs() < f64::EPSILON);
+        assert!(
+            (LanceDbStore::normalize_score(0.0, DistanceMetric::L2).value() - 1.0).abs()
+                < f64::EPSILON
+        );
 
         // 1.0 distance → 0.5 score
-        assert!((LanceDbStore::normalize_score(1.0, DistanceMetric::L2).value() - 0.5).abs() < f64::EPSILON);
+        assert!(
+            (LanceDbStore::normalize_score(1.0, DistanceMetric::L2).value() - 0.5).abs()
+                < f64::EPSILON
+        );
 
         // Large distance → small score
         assert!(LanceDbStore::normalize_score(10.0, DistanceMetric::L2).value() < 0.1);

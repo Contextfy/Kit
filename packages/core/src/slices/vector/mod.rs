@@ -33,9 +33,9 @@
 pub mod trait_;
 
 // Concrete implementations and helpers are private to prevent infrastructure leakage
-pub(crate) mod schema;
 pub(crate) mod connection;
 pub(crate) mod lancedb_impl;
+pub(crate) mod schema;
 
 // **MANDATORY**: Only export the trait, NOT concrete implementations
 // Concrete types like LanceDbStore must not be accessible from outside this slice

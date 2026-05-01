@@ -114,13 +114,18 @@ pub(crate) fn validate_bm25_schema(schema: &Schema) -> Result<(), String> {
     if field_count != expected_count {
         return Err(format!(
             "Field count mismatch: expected {}, got {}",
-            expected_count,
-            field_count
+            expected_count, field_count
         ));
     }
 
     // Verify all expected fields exist with correct types and properties
-    for field_name in &[FIELD_ID, FIELD_TITLE, FIELD_SUMMARY, FIELD_CONTENT, FIELD_KEYWORDS] {
+    for field_name in &[
+        FIELD_ID,
+        FIELD_TITLE,
+        FIELD_SUMMARY,
+        FIELD_CONTENT,
+        FIELD_KEYWORDS,
+    ] {
         // Check field exists
         let field = schema
             .get_field(field_name)
@@ -130,9 +135,12 @@ pub(crate) fn validate_bm25_schema(schema: &Schema) -> Result<(), String> {
         let entry = schema.get_field_entry(field);
 
         // Get expected field entry for comparison
-        let expected_field = expected
-            .get_field(field_name)
-            .map_err(|_| format!("Expected field '{}' not found in expected schema", field_name))?;
+        let expected_field = expected.get_field(field_name).map_err(|_| {
+            format!(
+                "Expected field '{}' not found in expected schema",
+                field_name
+            )
+        })?;
         let expected_entry = expected.get_field_entry(expected_field);
 
         // Validate field type and properties match
@@ -151,12 +159,7 @@ pub(crate) fn validate_bm25_schema(schema: &Schema) -> Result<(), String> {
             // TEXT fields should have indexing options with tokenizer
             let text_options = match entry.field_type() {
                 tantivy::schema::FieldType::Str(opts) => opts,
-                _ => {
-                    return Err(format!(
-                        "Field '{}' should be Str(TEXT) type",
-                        field_name
-                    ))
-                }
+                _ => return Err(format!("Field '{}' should be Str(TEXT) type", field_name)),
             };
 
             let indexing = text_options.get_indexing_options().ok_or_else(|| {
@@ -182,17 +185,15 @@ pub(crate) fn validate_bm25_schema(schema: &Schema) -> Result<(), String> {
             // ID field should be STRING type (indexed but not tokenized with "raw" tokenizer)
             let text_options = match entry.field_type() {
                 tantivy::schema::FieldType::Str(opts) => opts,
-                _ => {
-                    return Err(format!(
-                        "Field '{}' should be Str type",
-                        field_name
-                    ))
-                }
+                _ => return Err(format!("Field '{}' should be Str type", field_name)),
             };
 
             // ID field should have indexing options with "raw" tokenizer (not tokenized)
             let indexing = text_options.get_indexing_options().ok_or_else(|| {
-                format!("Field '{}' should have indexing options with 'raw' tokenizer", field_name)
+                format!(
+                    "Field '{}' should have indexing options with 'raw' tokenizer",
+                    field_name
+                )
             })?;
 
             let tokenizer = indexing.tokenizer();
@@ -235,7 +236,13 @@ mod tests {
             .collect();
         assert_eq!(
             field_names,
-            vec![FIELD_ID, FIELD_TITLE, FIELD_SUMMARY, FIELD_CONTENT, FIELD_KEYWORDS]
+            vec![
+                FIELD_ID,
+                FIELD_TITLE,
+                FIELD_SUMMARY,
+                FIELD_CONTENT,
+                FIELD_KEYWORDS
+            ]
         );
     }
 
@@ -347,7 +354,11 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err();
         // Field type comparison catches the tokenizer difference
-        assert!(err_msg.contains("type mismatch") || err_msg.contains("tokenizer") || err_msg.contains("raw"));
+        assert!(
+            err_msg.contains("type mismatch")
+                || err_msg.contains("tokenizer")
+                || err_msg.contains("raw")
+        );
     }
 
     #[test]

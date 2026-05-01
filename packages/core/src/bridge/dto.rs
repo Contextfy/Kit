@@ -243,7 +243,7 @@ mod tests {
         // Simulate pagination: returned 2 hits, but there are 100 total matches
         let response = SearchResponseDto::from_kernel(hits, 100, 50);
         assert_eq!(response.hits.len(), 2);
-        assert_eq!(response.total_count, 100);  // Total matches, not returned hits
+        assert_eq!(response.total_count, 100); // Total matches, not returned hits
         assert_eq!(response.elapsed_ms, 50);
         assert!(!response.is_empty());
         assert_eq!(response.len(), 2);
@@ -283,7 +283,10 @@ mod tests {
         // Test that None is properly preserved
         let kernel_none: Option<Hit> = None;
         let dto_none = optional_hit_from_kernel(kernel_none);
-        assert!(dto_none.is_none(), "None must be preserved, never converted to a fake object");
+        assert!(
+            dto_none.is_none(),
+            "None must be preserved, never converted to a fake object"
+        );
 
         // Defensive assertion: never use a fake object with empty fields to represent None
         let fake = HitDto {

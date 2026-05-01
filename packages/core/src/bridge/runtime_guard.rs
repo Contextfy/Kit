@@ -16,10 +16,10 @@
 //! Ref: `openspec/changes/refactor-pragmatic-slice-architecture/design.md` - Rule 1
 //! Ref: `openspec/changes/refactor-pragmatic-slice-architecture/specs/bridge-layer/spec.md`
 
+use crate::bridge::error_map::BridgeError;
 use once_cell::sync::OnceCell;
 use std::future::Future;
 use tokio::runtime::{Handle, Runtime};
-use crate::bridge::error_map::BridgeError;
 
 /// Global Tokio runtime singleton
 ///
@@ -47,10 +47,12 @@ fn get_global_runtime() -> Result<&'static Runtime, BridgeError> {
             .thread_name("contextfy-bridge-runtime")
             .enable_all()
             .build()
-            .map_err(|e| BridgeError::runtime(
-                "Failed to initialize global Tokio runtime",
-                Some(Box::new(e)),
-            ))
+            .map_err(|e| {
+                BridgeError::runtime(
+                    "Failed to initialize global Tokio runtime",
+                    Some(Box::new(e)),
+                )
+            })
     })
 }
 
@@ -233,12 +235,11 @@ mod tests {
         // This test verifies that calling block_on from within an async context
         // returns a proper BridgeError instead of panicking
         let rt = RuntimeGuard::global().expect("Global runtime should initialize");
-        let err = rt.block_on(async {
-            RuntimeGuard::block_on(async { 1 + 1 })
-                .unwrap_err()
-        });
+        let err = rt.block_on(async { RuntimeGuard::block_on(async { 1 + 1 }).unwrap_err() });
 
-        assert!(err.to_string().contains("Cannot call RuntimeGuard::block_on"));
+        assert!(err
+            .to_string()
+            .contains("Cannot call RuntimeGuard::block_on"));
     }
 
     #[test]

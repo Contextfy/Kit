@@ -20,8 +20,8 @@
 
 use std::collections::HashMap;
 
-use crate::kernel::types::{Hit, Score};
 use crate::kernel::errors::{AppError, DomainError};
+use crate::kernel::types::{Hit, Score};
 
 /// RRF fusion result with combined score
 #[derive(Debug, Clone)]
@@ -170,7 +170,11 @@ impl RrfOrchestrator {
     /// `fuse_two` always provides exactly two lists to the underlying `fuse`
     /// method, this function will never actually return an error. Empty result
     /// lists are valid inputs and will produce an empty result.
-    pub fn fuse_two(&self, results1: Vec<Hit>, results2: Vec<Hit>) -> Result<Vec<RrfResult>, AppError> {
+    pub fn fuse_two(
+        &self,
+        results1: Vec<Hit>,
+        results2: Vec<Hit>,
+    ) -> Result<Vec<RrfResult>, AppError> {
         self.fuse(vec![results1, results2], None)
     }
 }
@@ -275,7 +279,8 @@ mod tests {
             create_hit("doc-4", 0.75),
         ];
 
-        let fused = orchestrator.fuse_two(results1, results2)
+        let fused = orchestrator
+            .fuse_two(results1, results2)
             .expect("fuse_two should succeed");
 
         // doc-1 should be highest (rank 1 in R1, rank 2 in R2)
@@ -300,7 +305,9 @@ mod tests {
 
         // Weight first ranker higher
         let weights = vec![2.0, 1.0];
-        let fused = orchestrator.fuse(vec![results1, results2], Some(weights)).unwrap();
+        let fused = orchestrator
+            .fuse(vec![results1, results2], Some(weights))
+            .unwrap();
 
         // doc-2 should be higher with weights (rank 2 in R1*2.0 + rank 1 in R2*1.0)
         // vs doc-1 (rank 1 in R1*2.0 + rank 2 in R2*1.0)
@@ -331,8 +338,8 @@ mod tests {
         let orchestrator = RrfOrchestrator::new(60);
 
         let results1 = vec![
-            create_hit("doc-1", 0.9),  // rank 1
-            create_hit("doc-2", 0.8),  // rank 2
+            create_hit("doc-1", 0.9), // rank 1
+            create_hit("doc-2", 0.8), // rank 2
         ];
 
         let results2 = vec![
@@ -340,22 +347,38 @@ mod tests {
             create_hit("doc-1", 0.85), // rank 2
         ];
 
-        let fused = orchestrator.fuse_two(results1, results2)
+        let fused = orchestrator
+            .fuse_two(results1, results2)
             .expect("fuse_two should succeed");
 
         // doc-1: rank 1 in R1 + rank 2 in R2
         // score = 1/(60+1) + 1/(60+2) = 0.01639 + 0.01613 = 0.03252
-        let doc1_score = fused.iter().find(|r| r.id == "doc-1").unwrap().score.value();
+        let doc1_score = fused
+            .iter()
+            .find(|r| r.id == "doc-1")
+            .unwrap()
+            .score
+            .value();
         assert!((doc1_score - 0.0325).abs() < 0.0001);
 
         // doc-2: rank 2 in R1 only
         // score = 1/(60+2) = 0.01613
-        let doc2_score = fused.iter().find(|r| r.id == "doc-2").unwrap().score.value();
+        let doc2_score = fused
+            .iter()
+            .find(|r| r.id == "doc-2")
+            .unwrap()
+            .score
+            .value();
         assert!((doc2_score - 0.0161).abs() < 0.0001);
 
         // doc-3: rank 1 in R2 only
         // score = 1/(60+1) = 0.01639
-        let doc3_score = fused.iter().find(|r| r.id == "doc-3").unwrap().score.value();
+        let doc3_score = fused
+            .iter()
+            .find(|r| r.id == "doc-3")
+            .unwrap()
+            .score
+            .value();
         assert!((doc3_score - 0.0164).abs() < 0.0001);
     }
 }

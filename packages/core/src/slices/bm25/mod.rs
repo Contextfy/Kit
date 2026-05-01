@@ -41,5 +41,4 @@ pub(crate) mod tantivy_impl;
 
 // **MANDATORY**: Only export the trait and result type, NOT concrete implementations
 // Concrete types like TantivyBm25Store must not be accessible from outside this slice
-pub use trait_::{Bm25StoreTrait, Bm25Result};
-
+pub use trait_::{Bm25Result, Bm25StoreTrait};
