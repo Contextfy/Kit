@@ -787,4 +787,3 @@ The core engine SHALL provide hybrid search that combines BM25 keyword matching 
 - **并且**系统确保当文档仅有 BM25 分数（归一化后为 1.0）时，最终分数为 0.7
 - **并且**系统确保当文档仅有向量分数（为 1.0）时，最终分数为 0.3
 - **并且**系统在除零情况下使用 `f32::EPSILON` 检查，当 `max_bm25 - min_bm25` 的绝对值小于 `EPSILON` 时，将归一化值设为 1.0（如果 BM25 分数大于 0）或 0.0
-

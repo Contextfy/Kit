@@ -43,8 +43,9 @@
 ///
 /// # 错误处理
 ///
+/// - 如果任一向量为空向量，直接返回 0.0
+/// - 如果两个向量长度不同，直接返回 0.0（长度不匹配表示数据错误）
 /// - 如果任一向量为零向量（所有元素为 0），直接返回 0.0
-/// - 如果两个向量长度不同，使用较短长度计算
 ///
 /// # 示例
 ///
@@ -119,6 +120,7 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::FRAC_1_SQRT_2;
 
     #[test]
     fn test_identical_vectors() {
@@ -223,8 +225,8 @@ mod tests {
         let a = vec![1.0, 0.0, 0.0];
         let b = vec![1.0, 1.0, 0.0];
         let sim = cosine_similarity(&a, &b);
-        // cos(45°) = 1/√2, 归一化后为 (1/√2 + 1) / 2 = 0.8535...
-        let expected = (std::f32::consts::FRAC_1_SQRT_2 + 1.0) / 2.0;
+        // cos(45°) = 0.707..., 归一化后为 (0.707 + 1) / 2 = 0.8535...
+        let expected = (FRAC_1_SQRT_2 + 1.0) / 2.0;
         assert!(
             (sim - expected).abs() < 1e-4,
             "部分相关向量相似度应约为 {}，实际为 {}",

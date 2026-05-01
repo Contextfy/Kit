@@ -8,8 +8,8 @@ license.workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-# lancedb = { workspace = true }
-# arrow = { workspace = true }
+lancedb = { workspace = true }
+arrow = { workspace = true }
 pulldown-cmark = { workspace = true }
 uuid = { workspace = true }
 anyhow = { workspace = true }
@@ -19,6 +19,11 @@ tantivy = { workspace = true }
 tantivy-jieba = { workspace = true }
 regex = { workspace = true }
 fastembed = { workspace = true }
+napi = { workspace = true, features = ["napi4", "async"] }
+once_cell = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+futures = "0.3"
 
 [dev-dependencies]
 tempfile = { workspace = true }

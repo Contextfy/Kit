@@ -267,6 +267,76 @@ impl EmbeddingModel {
 // Note: EmbeddingModel is Send + Sync because Mutex<T> is Send + Sync when T is Send.
 // No unsafe impl needed - Mutex provides the necessary guarantees.
 
+/// Fake embedding backend for testing purposes.
+///
+/// This type provides a deterministic, no-op implementation of the embedding
+/// interface for unit tests that don't require real embedding generation.
+/// It generates 384-dimensional vectors based on a simple hash of the input text,
+/// ensuring identical inputs produce identical outputs.
+///
+/// **IMPORTANT**: This is for TESTING ONLY. Never use this in production code.
+///
+/// # Properties
+///
+/// - Deterministic: Same text always produces the same vector
+/// - Fast: No ONNX model loading or inference
+/// - No external dependencies: Works offline without model downloads
+/// - Predictable dimension: Always returns 384-dimensional vectors
+///
+/// # Example
+///
+/// ```rust
+/// use contextfy_core::embeddings::FakeEmbeddingBackend;
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let fake = FakeEmbeddingBackend::new();
+/// let vector = fake.embed_text("test")?;
+/// assert_eq!(vector.len(), 384);
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(test)]
+pub struct FakeEmbeddingBackend;
+
+#[cfg(test)]
+impl FakeEmbeddingBackend {
+    /// Creates a new fake embedding backend.
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Generates a deterministic 384-dimensional fake embedding vector.
+    ///
+    /// The vector is generated using a simple hash of the input text, ensuring
+    /// that identical inputs produce identical outputs. This is useful for
+    /// deterministic testing.
+    pub fn embed_text(&self, text: &str) -> anyhow::Result<Vec<f32>> {
+        let mut vector = Vec::with_capacity(384);
+
+        // Use a simple hash algorithm to generate deterministic values
+        let mut hash: u64 = 5381;
+        for byte in text.bytes() {
+            hash = hash.wrapping_mul(33).wrapping_add(byte as u64);
+        }
+
+        // Generate 384 dimensions from the hash
+        for i in 0..384 {
+            // Mix the hash with the index to get different values per dimension
+            let mixed_hash = hash.wrapping_mul(i as u64).wrapping_add(i as u64);
+            // Normalize to [0, 1] range
+            let value = (mixed_hash % 1000) as f32 / 1000.0;
+            vector.push(value);
+        }
+
+        Ok(vector)
+    }
+
+    /// Generates multiple deterministic fake embedding vectors.
+    pub fn embed_batch(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        texts.iter().map(|&text| self.embed_text(text)).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,11 +1,11 @@
 use anyhow::Result;
 use colored::Colorize;
-use contextfy_core::{KnowledgeStore, Retriever};
+use contextfy_core::SearchEngine;
 
 /// 搜索知识库
 ///
-/// 使用两阶段检索策略快速搜索知识库。首先返回匹配结果的摘要和评分，
-/// 用户可以根据摘要决定是否加载完整内容。
+/// 使用混合检索策略（BM25 + Vector）快速搜索知识库。
+/// 返回匹配结果的摘要和评分。
 ///
 /// # Arguments
 ///
@@ -26,40 +26,56 @@ use contextfy_core::{KnowledgeStore, Retriever};
 /// # }
 /// ```
 pub async fn scout(query: String) -> Result<()> {
-    let store = KnowledgeStore::new(".contextfy/data", None).await?;
-    let retriever = Retriever::new(&store);
+    let engine = SearchEngine::new(
+        Some(std::path::Path::new(".contextfy/data/bm25_index")),
+        ".contextfy/data/lancedb",
+        "knowledge",
+    )
+    .await?;
 
-    match retriever.scout(&query).await {
-        Ok(briefs) => {
-            if briefs.is_empty() {
+    match engine.search(&query, 10).await {
+        Ok(hits) => {
+            if hits.is_empty() {
                 println!("No results found.");
             } else {
-                println!("\nFound {} result(s):", briefs.len());
-                for (i, result) in briefs.iter().enumerate() {
-                    let display_title = if result.parent_doc_title == result.title {
-                        result.title.clone()
-                    } else {
-                        format!("[{}] {}", result.parent_doc_title, result.title)
-                    };
+                println!("\nFound {} result(s):", hits.len());
 
+                // Batch fetch all document details in one call (more efficient)
+                let ids: Vec<String> = hits.iter().map(|h| h.id.clone()).collect();
+                let docs_result = engine.get_documents(&ids).await;
+
+                for (i, hit) in hits.iter().enumerate() {
                     // 根据分数使用不同颜色高亮
-                    let score_display = format!("{:.2}", result.score);
-                    let colored_score = if result.score >= 5.0 {
+                    let score_display = format!("{:.2}", hit.score.value());
+                    let colored_score = if hit.score.value() >= 0.8 {
                         score_display.green().bold()
-                    } else if result.score >= 2.0 {
+                    } else if hit.score.value() >= 0.5 {
                         score_display.yellow().bold()
                     } else {
                         score_display.white().dimmed()
                     };
 
                     println!(
-                        "\n[{}] {} | {}",
+                        "\n[{}] {} | ID: {}",
                         i + 1,
                         format!("Score: {}", colored_score).cyan(),
-                        display_title
+                        hit.id
                     );
-                    println!("    ID: {}", result.id);
-                    println!("    Summary: {}", result.summary);
+
+                    // Try to get document details from batch result
+                    match &docs_result {
+                        Ok(docs) => {
+                            if let Some(Some(doc)) = docs.get(i) {
+                                println!("    Title: {}", doc.title);
+                                println!("    Summary: {}", doc.summary);
+                            } else {
+                                println!("    (Document details not available)");
+                            }
+                        }
+                        Err(_) => {
+                            println!("    (Failed to load document details)");
+                        }
+                    }
                 }
             }
         }

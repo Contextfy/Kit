@@ -1,3 +1,5 @@
+# 实施任务清单
+
 ## 1. 实现
 
 - [x] 1.1 修改 `packages/core/src/retriever/mod.rs` 中的 `Brief` 结构体，添加 `score: f32` 字段

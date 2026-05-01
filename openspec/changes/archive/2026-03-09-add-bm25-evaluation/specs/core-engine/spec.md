@@ -7,8 +7,8 @@ The core engine SHALL provide an automated evaluation harness to quantify BM25 s
 #### Scenario: 运行 A/B 搜索效果评估测试
 
 - **当**开发者运行集成测试 `cargo test --test evaluation_test` 时
-- **则**系统加载 18 篇硬编码的模拟 Minecraft 模组开发文档
-- **并且**系统对预定义的 10 个查询同时执行 M1 朴素匹配和 BM25 搜索
+- **则**系统加载 22 篇硬编码的模拟 Minecraft 模组开发文档
+- **并且**系统对预定义的 13 个查询同时执行 M1 朴素匹配和 BM25 搜索
 - **并且**系统对比两者的 Top-3 结果与人工标注的 Ground Truth
 - **并且**系统计算 Accuracy@3、NDCG@3、Hit Rate@3 三项指标
 - **并且**系统在 `docs/` 目录生成 `BM25_EVALUATION_REPORT.md` 报告文件
