@@ -109,6 +109,58 @@ impl PartialOrd for Hit {
     }
 }
 
+/// A parsed AST chunk from a Python sidecar process
+///
+/// Represents a code symbol (function, class, method, etc.) extracted by
+/// the Python `cocoindex` tool and transmitted via IPC (JSONL format).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AstChunk {
+    /// Absolute or relative path to the source file
+    pub file_path: String,
+
+    /// Symbol name (e.g., "MyClass", "my_function")
+    pub symbol_name: String,
+
+    /// Node type (e.g., "function", "class", "method", "variable")
+    pub node_type: String,
+
+    /// AST content representation (could be source code snippet or structured data)
+    pub ast_content: String,
+
+    /// List of dependencies (other symbols this chunk references)
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+}
+
+impl AstChunk {
+    /// Create a new AST chunk
+    pub fn new(
+        file_path: impl Into<String>,
+        symbol_name: impl Into<String>,
+        node_type: impl Into<String>,
+        ast_content: impl Into<String>,
+        dependencies: Vec<String>,
+    ) -> Self {
+        Self {
+            file_path: file_path.into(),
+            symbol_name: symbol_name.into(),
+            node_type: node_type.into(),
+            ast_content: ast_content.into(),
+            dependencies,
+        }
+    }
+
+    /// Create an AST chunk with no dependencies
+    pub fn without_dependencies(
+        file_path: impl Into<String>,
+        symbol_name: impl Into<String>,
+        node_type: impl Into<String>,
+        ast_content: impl Into<String>,
+    ) -> Self {
+        Self::new(file_path, symbol_name, node_type, ast_content, Vec::new())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,8 +185,8 @@ mod tests {
         let hit3 = Hit::new("doc3", Score::new(0.7));
 
         // Higher scores should be considered "greater"
-        assert!(hit1 > hit3);  // 0.9 > 0.7 → hit1 is better
-        assert!(hit3 > hit2);  // 0.7 > 0.5 → hit3 is better
+        assert!(hit1 > hit3); // 0.9 > 0.7 → hit1 is better
+        assert!(hit3 > hit2); // 0.7 > 0.5 → hit3 is better
     }
 
     #[test]
@@ -172,5 +224,66 @@ mod tests {
         // Empty query should be handled at domain level
         let q2 = Query::new("", 10);
         assert!(q2.text.is_empty());
+    }
+
+    #[test]
+    fn test_ast_chunk_creation() {
+        let chunk = AstChunk::new(
+            "/path/to/file.py",
+            "MyClass",
+            "class",
+            "class MyClass:\n    pass",
+            vec!["OtherClass".to_string()],
+        );
+
+        assert_eq!(chunk.file_path, "/path/to/file.py");
+        assert_eq!(chunk.symbol_name, "MyClass");
+        assert_eq!(chunk.node_type, "class");
+        assert_eq!(chunk.ast_content, "class MyClass:\n    pass");
+        assert_eq!(chunk.dependencies, vec!["OtherClass"]);
+    }
+
+    #[test]
+    fn test_ast_chunk_without_dependencies() {
+        let chunk = AstChunk::without_dependencies(
+            "/path/to/file.py",
+            "my_function",
+            "function",
+            "def my_function():\n    pass",
+        );
+
+        assert_eq!(chunk.file_path, "/path/to/file.py");
+        assert_eq!(chunk.symbol_name, "my_function");
+        assert_eq!(chunk.node_type, "function");
+        assert!(chunk.dependencies.is_empty());
+    }
+
+    #[test]
+    fn test_ast_chunk_serialization() {
+        let chunk = AstChunk::new(
+            "test.py",
+            "foo",
+            "function",
+            "pass",
+            vec!["bar".to_string()],
+        );
+
+        // Test serialization
+        let json = serde_json::to_string(&chunk).unwrap();
+        assert!(json.contains("\"file_path\":\"test.py\""));
+        assert!(json.contains("\"symbol_name\":\"foo\""));
+
+        // Test deserialization
+        let deserialized: AstChunk = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, chunk);
+    }
+
+    #[test]
+    fn test_ast_chunk_default_dependencies() {
+        // JSON without dependencies field should default to empty array
+        let json = r#"{"file_path":"test.py","symbol_name":"foo","node_type":"function","ast_content":"pass"}"#;
+        let chunk: AstChunk = serde_json::from_str(json).unwrap();
+
+        assert!(chunk.dependencies.is_empty());
     }
 }

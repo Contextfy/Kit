@@ -7,4 +7,4 @@ pub mod errors;
 pub mod types;
 
 pub use errors::{AppError, DomainError, InfraError};
-pub use types::{Hit, Query, Score};
+pub use types::{AstChunk, Hit, Query, Score};
