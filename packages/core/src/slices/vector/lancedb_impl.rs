@@ -7,9 +7,15 @@ use anyhow::{Context, Result as AnyhowResult};
 ///
 /// Ref: `openspec/changes/refactor-pragmatic-slice-architecture/design.md` - Rule 2
 use async_trait::async_trait;
+use arrow::array::{Float32Array, RecordBatch, StringArray};
+use arrow::record_batch::RecordBatchIterator;
 use lancedb::connection::Connection as LanceConnection;
+use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::Table as LanceTable;
+use std::sync::Arc;
+use futures::StreamExt;
 
+use crate::embeddings::EmbeddingModel;
 use crate::kernel::errors::{AppError, InfraError};
 use crate::kernel::types::{Hit, Query, Score};
 
@@ -43,9 +49,11 @@ pub enum DistanceMetric {
 ///
 /// * `conn` - LanceDB connection object
 /// * `table_name` - Name of the table to use
+/// * `embedding_model` - Embedding model for vectorizing text
 pub struct LanceDbStore {
     conn: LanceConnection,
     table_name: String,
+    embedding_model: Arc<EmbeddingModel>,
 }
 
 impl LanceDbStore {
@@ -55,15 +63,20 @@ impl LanceDbStore {
     ///
     /// * `conn` - LanceDB connection object
     /// * `table_name` - Name of the table to use
+    /// * `embedding_model` - Embedding model for vectorizing text
     ///
     /// # Returns
     ///
     /// Returns a new `LanceDbStore` instance.
-    #[allow(dead_code)]
-    pub fn new(conn: LanceConnection, table_name: impl Into<String>) -> Self {
+    pub fn new(
+        conn: LanceConnection,
+        table_name: impl Into<String>,
+        embedding_model: Arc<EmbeddingModel>,
+    ) -> Self {
         Self {
             conn,
             table_name: table_name.into(),
+            embedding_model,
         }
     }
 
@@ -119,66 +132,248 @@ impl VectorStoreTrait for LanceDbStore {
     ///
     /// # Implementation Notes
     ///
-    /// 1. Query text should be embedded to vector before calling (currently placeholder)
+    /// 1. Query text is embedded to vector using BGE-small-en model
     /// 2. Performs vector similarity search using LanceDB
     /// 3. Converts results to kernel Hit types with normalized scores
     /// 4. Returns Ok(Some(vec[])) if no results found (not an error)
     ///
-    /// # Phase 1 Limitation
+    /// # Phase 2 Implementation
     ///
-    /// This is a placeholder implementation. Actual vector search requires:
-    /// - Embedding model integration
-    /// - Query vectorization
-    /// - Full LanceDB search query construction
+    /// - Generates embedding vector for the query text
+    /// - Executes LanceDB vector search with the query vector
+    /// - Converts LanceDB results to Hit types
     async fn search(&self, query: &Query) -> Result<Option<Vec<Hit>>, AppError> {
-        // Phase 1: Placeholder - return empty results
-        // Phase 2: Implement actual vector search:
-        // 1. Embed query.text to vector
-        // 2. Execute LanceDB vector search
-        // 3. Convert results to Hit types
+        // Step 1: Generate embedding vector for the query text
+        let query_vector = self
+            .embedding_model
+            .embed_text(&query.text)
+            .map_err(|e| AppError::Infra(InfraError::Other(format!(
+                "Failed to generate query embedding: {}",
+                e
+            ))))?;
 
-        let _ = query; // Suppress unused warning in Phase 1
+        // Step 2: Get the LanceDB table
+        let table = self
+            .get_table()
+            .await
+            .map_err(|e| AppError::Infra(InfraError::database(
+                "Failed to open table for search",
+                Some(e),
+            )))?;
 
-        // Placeholder: return empty results
-        // In Phase 2, this will be:
-        // let table = self.get_table().await
-        //     .map_err(|e| InfraError::database("search failed", Some(e)))?;
-        // let results = table.search(&query_vector)
-        //     .limit(query.limit)
-        //     .execute()
-        //     .await
-        //     .map_err(|e| InfraError::database("search failed", Some(e)))?;
-        // Convert results to Hit types...
+        // Step 3: Execute vector search using LanceDB's query API
+        // API: table.query().nearest_to(query_vector).limit(n).execute().await
+        // Note: IntoQueryVector is implemented for Vec<f32>, so we pass query_vector directly
+        let vector_query = table
+            .query()
+            .nearest_to(query_vector)
+            .map_err(|e| AppError::Infra(InfraError::database(
+                "Failed to create vector query",
+                Some(e),
+            )))?
+            .limit(query.limit);
 
-        Ok(Some(vec![]))
+        // Execute the query
+        let mut results_stream: lancedb::arrow::SendableRecordBatchStream = vector_query
+            .execute()
+            .await
+            .map_err(|e| AppError::Infra(InfraError::database(
+                "Vector search execution failed",
+                Some(e),
+            )))?;
+
+        // Step 4: Collect results from the stream and convert to Hit types
+        let mut hits = Vec::new();
+
+        while let Some(batch_result) = results_stream.next().await {
+            let batch = batch_result.map_err(|e| {
+                AppError::Infra(InfraError::database(
+                    "Failed to read result batch",
+                    Some(e),
+                ))
+            })?;
+
+            // Get the _distance column (auto-added by LanceDB)
+            let distance_col = batch
+                .column_by_name("_distance")
+                .ok_or_else(|| {
+                    AppError::Infra(InfraError::Other(
+                        "Missing _distance column in search results".to_string(),
+                    ))
+                })?;
+
+            let distances = distance_col
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .ok_or_else(|| {
+                    AppError::Infra(InfraError::Other(
+                        "Failed to cast _distance column to Float32Array".to_string(),
+                    ))
+                })?;
+
+            // Get the id column
+            let id_col = batch.column_by_name("id").ok_or_else(|| {
+                AppError::Infra(InfraError::Other(
+                    "Missing id column in search results".to_string(),
+                ))
+            })?;
+
+            let ids = id_col.as_any().downcast_ref::<StringArray>().ok_or_else(|| {
+                AppError::Infra(InfraError::Other(
+                    "Failed to cast id column to StringArray".to_string(),
+                ))
+            })?;
+
+            // Convert each row to a Hit
+            for row in 0..batch.num_rows() {
+                let distance = distances.value(row);
+                let id = ids.value(row).to_string();
+
+                // Normalize the distance to a relevance score
+                // LanceDB uses L2 distance by default, which ranges [0, +infinity)
+                // We convert to [0, 1] where 1.0 is best match
+                let score = Self::normalize_score(distance, DistanceMetric::L2);
+
+                hits.push(Hit { id, score });
+            }
+        }
+
+        if hits.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(hits))
+        }
     }
 
     /// Add a document to the vector store
     ///
     /// # Implementation Notes
     ///
-    /// 1. Document text should be embedded to vector before calling (currently placeholder)
-    /// 2. Adds record with id, text, vector, and metadata to LanceDB
+    /// 1. Document text is embedded to vector using BGE-small-en model
+    /// 2. Adds record with id, title, summary, content, vector, and keywords to LanceDB
     ///
-    /// # Phase 1 Limitation
+    /// # Phase 2 Implementation
     ///
-    /// This is a placeholder implementation. Actual add requires:
-    /// - Embedding model integration
-    /// - Document vectorization
-    /// - LanceDB record insertion
+    /// - Generates embedding vector for the text content
+    /// - Extracts title and summary from metadata
+    /// - Creates LanceDB record and inserts into table
     async fn add(
         &self,
         id: &str,
         text: &str,
         metadata: Option<&serde_json::Value>,
     ) -> Result<(), AppError> {
-        let _ = (id, text, metadata); // Suppress unused warnings in Phase 1
+        // Step 1: Generate embedding vector for the text
+        let embedding = self
+            .embedding_model
+            .embed_text(text)
+            .map_err(|e| AppError::Infra(InfraError::Other(format!(
+                "Failed to generate embedding: {}",
+                e
+            ))))?;
 
-        // Phase 1: Placeholder - do nothing
-        // Phase 2: Implement actual insertion:
-        // 1. Embed text to vector
-        // 2. Create LanceDB record with all fields
-        // 3. Insert into table
+        // Step 2: Extract title and summary from metadata
+        let (title, summary, keywords) = if let Some(meta) = metadata {
+            let title = meta
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let summary = meta
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let keywords = meta.get("keywords").and_then(|v| v.as_str());
+            (title, summary, keywords)
+        } else {
+            (String::new(), String::new(), None)
+        };
+
+        // Step 3: Get the LanceDB table
+        let table = self
+            .get_table()
+            .await
+            .map_err(|e| AppError::Infra(InfraError::database(
+                "Failed to open table for add",
+                Some(e),
+            )))?;
+
+        // Step 4: Create Arrow record batch using direct array creation
+        // Schema: id, title, summary, content, vector, keywords, source_path
+        use arrow::array::{FixedSizeListArray, Float32Array};
+        use arrow::datatypes::{Field, Schema};
+
+        // Create schema
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", arrow::datatypes::DataType::Utf8, false),
+            Field::new("title", arrow::datatypes::DataType::Utf8, false),
+            Field::new("summary", arrow::datatypes::DataType::Utf8, false),
+            Field::new("content", arrow::datatypes::DataType::Utf8, false),
+            Field::new(
+                "vector",
+                arrow::datatypes::DataType::FixedSizeList(
+                    Arc::new(Field::new("item", arrow::datatypes::DataType::Float32, false)),
+                    384,
+                ),
+                false,
+            ),
+            Field::new("keywords", arrow::datatypes::DataType::Utf8, true),
+            Field::new("source_path", arrow::datatypes::DataType::Utf8, false),
+        ]));
+
+        // Create arrays directly
+        let id_array = StringArray::from(vec![id]);
+        let title_array = StringArray::from(vec![title.as_str()]);
+        let summary_array = StringArray::from(vec![summary.as_str()]);
+        let content_array = StringArray::from(vec![text]);
+        let keywords_array = StringArray::from(vec![keywords]);
+        let source_path_array = StringArray::from(vec!["unknown"]);
+
+        // Create FixedSizeListArray for vector
+        let vector_values = Float32Array::from(embedding.clone());
+        // The field should describe the item inside the list (Float32), not the list itself
+        // FixedSizeListArray::new() will wrap it in FixedSizeList automatically
+        let vector_item_field = Field::new("item", arrow::datatypes::DataType::Float32, false);
+        let vector_array = FixedSizeListArray::new(
+            Arc::new(vector_item_field),
+            384,
+            Arc::new(vector_values),
+            None, // null bitmap (None means all values are valid)
+        );
+
+        // Create the record batch
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(id_array) as Arc<dyn arrow::array::Array>,
+                Arc::new(title_array) as Arc<dyn arrow::array::Array>,
+                Arc::new(summary_array) as Arc<dyn arrow::array::Array>,
+                Arc::new(content_array) as Arc<dyn arrow::array::Array>,
+                Arc::new(vector_array) as Arc<dyn arrow::array::Array>,
+                Arc::new(keywords_array) as Arc<dyn arrow::array::Array>,
+                Arc::new(source_path_array) as Arc<dyn arrow::array::Array>,
+            ],
+        )
+        .map_err(|e| {
+            AppError::Infra(InfraError::Other(format!("Failed to create RecordBatch: {}", e)))
+        })?;
+
+        // Step 5: Wrap in RecordBatchIterator and add to table
+        let batches = vec![batch];
+        let reader = RecordBatchIterator::new(
+            batches.into_iter().map(Ok),
+            schema,
+        );
+
+        table
+            .add(reader)
+            .execute()
+            .await
+            .map_err(|e| AppError::Infra(InfraError::database(
+                "Failed to add record to LanceDB",
+                Some(e),
+            )))?;
 
         Ok(())
     }
@@ -252,7 +447,7 @@ mod tests {
     use super::*;
     use crate::slices::vector::connection::{connect, create_table_if_not_exists};
 
-    /// Helper to create a test store
+    /// Helper to create a test store with fake embedding backend
     async fn create_test_store() -> (LanceDbStore, tempfile::TempDir) {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let db_uri = temp_dir.path().to_str().expect("Invalid path");
@@ -264,7 +459,10 @@ mod tests {
             .await
             .expect("Failed to create table");
 
-        let store = LanceDbStore::new(conn, table_name);
+        // Create embedding model (downloads BGE-small-en on first run, ~100-400MB)
+        let embedding_model = Arc::new(EmbeddingModel::new().expect("Failed to create embedding model"));
+
+        let store = LanceDbStore::new(conn, table_name, embedding_model);
 
         (store, temp_dir)
     }
@@ -277,22 +475,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_search_placeholder() {
+    #[ignore] // Expensive test - requires model download and embedding generation
+    async fn test_search_and_add() {
         let (store, _temp_dir) = create_test_store().await;
 
-        let query = Query::new("test query", 10);
+        // Add a test document
+        let metadata = serde_json::json!({
+            "title": "Test Document",
+            "summary": "A test document for vector search"
+        });
+
+        let add_result = store.add("doc1", "test content for search", Some(&metadata)).await;
+        assert!(add_result.is_ok(), "Add should succeed");
+
+        // Search for similar documents
+        let query = Query::new("test content", 10);
         let result = store.search(&query).await;
 
-        assert!(result.is_ok());
-        let hits = result.unwrap().unwrap();
-        assert_eq!(hits.len(), 0); // Phase 1: empty results
+        assert!(result.is_ok(), "Search should succeed");
+        let hits = result.unwrap();
+        assert!(hits.is_some(), "Should return Some(hits), not None");
+
+        let hits = hits.unwrap();
+        assert!(hits.len() > 0, "Should find at least one result");
+        assert_eq!(hits[0].id, "doc1", "First hit should be doc1");
     }
 
     #[tokio::test]
-    async fn test_add_placeholder() {
+    #[ignore] // Expensive test - requires model download and embedding generation
+    async fn test_add_with_metadata() {
         let (store, _temp_dir) = create_test_store().await;
 
-        let result = store.add("doc1", "test content", None).await;
+        let metadata = serde_json::json!({
+            "title": "Test Title",
+            "summary": "Test Summary"
+        });
+
+        let result = store.add("doc1", "test content", Some(&metadata)).await;
 
         assert!(result.is_ok());
     }
@@ -324,8 +543,11 @@ mod tests {
 
         let conn = connect(db_uri).await.expect("Failed to connect");
 
+        // Create embedding model for the store
+        let embedding_model = Arc::new(EmbeddingModel::new().expect("Failed to create embedding model"));
+
         // Create store with non-existent table
-        let store = LanceDbStore::new(conn, "nonexistent_table");
+        let store = LanceDbStore::new(conn, "nonexistent_table", embedding_model);
 
         let result = store.health_check().await;
 

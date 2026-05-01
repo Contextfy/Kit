@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::embeddings::EmbeddingModel;
 use crate::slices::bm25::trait_::Bm25StoreTrait;
 use crate::slices::hybrid::HybridOrchestrator;
 use crate::slices::vector::VectorStoreTrait;
@@ -86,7 +87,11 @@ pub async fn build_hybrid_orchestrator(
         .await
         .context("Failed to create LanceDB table")?;
 
-    let vector_store = LanceDbStore::new(conn, table_name);
+    // Create embedding model (expensive initialization, done once)
+    let embedding_model = Arc::new(EmbeddingModel::new()
+        .context("Failed to initialize embedding model")?);
+
+    let vector_store = LanceDbStore::new(conn, table_name, embedding_model);
 
     // Wrap in Arc for trait object sharing
     let bm25_store: Arc<dyn Bm25StoreTrait> = Arc::new(bm25_store);
