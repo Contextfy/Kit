@@ -7,8 +7,8 @@
 
 use async_trait::async_trait;
 
-use crate::kernel::types::{Query, Hit, Score};
 use crate::kernel::errors::AppError;
+use crate::kernel::types::{Hit, Query, Score};
 
 /// BM25 search result with document metadata
 ///
@@ -41,7 +41,13 @@ impl Bm25Result {
     }
 
     /// Create a new BM25 result with full content (for get_by_id results)
-    pub fn with_content(id: String, title: String, summary: String, content: String, score: Score) -> Self {
+    pub fn with_content(
+        id: String,
+        title: String,
+        summary: String,
+        content: String,
+        score: Score,
+    ) -> Self {
         Self {
             id,
             title,

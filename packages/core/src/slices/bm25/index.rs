@@ -62,8 +62,9 @@ pub fn create_bm25_index(directory: Option<&Path>) -> Result<Index> {
             match Index::open_in_dir(path) {
                 Ok(idx) => {
                     // IMPORTANT: Validate schema of existing index to catch incompatibility early
-                    validate_bm25_schema(&idx.schema())
-                        .map_err(|e| anyhow::anyhow!("Existing index has incompatible schema: {}", e))?;
+                    validate_bm25_schema(&idx.schema()).map_err(|e| {
+                        anyhow::anyhow!("Existing index has incompatible schema: {}", e)
+                    })?;
                     idx
                 }
                 Err(open_err) => {
@@ -111,8 +112,8 @@ pub(crate) fn create_index_reader(index: &Index) -> Result<tantivy::IndexReader>
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::schema::FIELD_TITLE;
+    use super::*;
     use tempfile::TempDir;
 
     #[test]
@@ -140,7 +141,10 @@ mod tests {
         assert!(schema.get_field(FIELD_TITLE).is_ok());
 
         // Verify index files were created (check for Tantivy's core metadata file)
-        assert!(index_path.join("meta.json").exists(), "meta.json should exist after index creation");
+        assert!(
+            index_path.join("meta.json").exists(),
+            "meta.json should exist after index creation"
+        );
     }
 
     #[test]
@@ -187,16 +191,14 @@ mod tests {
         let index_path = temp_dir.path();
 
         // Create index with tokenizer
-        let index1 = create_bm25_index(Some(index_path))
-            .expect("Failed to create index");
+        let index1 = create_bm25_index(Some(index_path)).expect("Failed to create index");
         assert!(
             index1.tokenizers().get("jieba").is_some(),
             "Tokenizer should be registered initially"
         );
 
         // Reopen index (simulates process restart)
-        let index2 = create_bm25_index(Some(index_path))
-            .expect("Failed to reopen index");
+        let index2 = create_bm25_index(Some(index_path)).expect("Failed to reopen index");
 
         // CRITICAL: Tokenizer MUST still be registered after reopening
         // Tantivy does NOT persist tokenizer registrations, so this is required

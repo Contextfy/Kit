@@ -12,6 +12,6 @@
 //!
 //! Ref: `openspec/changes/refactor-pragmatic-slice-architecture/design.md`
 
-pub mod vector;
 pub mod bm25;
 pub mod hybrid;
+pub mod vector;

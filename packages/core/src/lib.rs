@@ -15,6 +15,6 @@ pub use parser::{parse_markdown, slice_by_headers, ParsedDoc, SlicedDoc, SlicedS
 // Slice exports (Phase 3)
 // NOTE: Storage traits only - concrete implementations like LanceDbStore should not be exposed
 // Algorithm/facade types like RrfOrchestrator are exceptions as they are domain services
-pub use slices::vector::VectorStoreTrait;
-pub use slices::bm25::{Bm25StoreTrait, Bm25Result};
+pub use slices::bm25::{Bm25Result, Bm25StoreTrait};
 pub use slices::hybrid::{RrfOrchestrator, RrfResult};
+pub use slices::vector::VectorStoreTrait;

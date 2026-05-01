@@ -102,18 +102,15 @@ pub(crate) async fn create_table_if_not_exists(
         .with_context(|| format!("Failed to create table: {}", table_name))?;
 
     // Verify table was created with correct schema
-    let created_schema = new_table
-        .schema()
-        .await
-        .with_context(|| format!("Failed to get schema for newly created table: {}", table_name))?;
-
-    validate_knowledge_schema(&created_schema).map_err(|e| {
-        anyhow::anyhow!(
-            "Created table '{}' has invalid schema: {}",
-            table_name,
-            e
+    let created_schema = new_table.schema().await.with_context(|| {
+        format!(
+            "Failed to get schema for newly created table: {}",
+            table_name
         )
     })?;
+
+    validate_knowledge_schema(&created_schema)
+        .map_err(|e| anyhow::anyhow!("Created table '{}' has invalid schema: {}", table_name, e))?;
 
     Ok(())
 }
@@ -164,9 +161,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let db_uri = temp_dir.path().to_str().expect("Invalid path");
 
-        let conn = connect(db_uri)
-            .await
-            .expect("Failed to connect to LanceDB");
+        let conn = connect(db_uri).await.expect("Failed to connect to LanceDB");
 
         // Verify connection succeeded
         assert!(!conn.database().to_string().is_empty());
@@ -179,9 +174,7 @@ mod tests {
         let db_uri = temp_dir.path().to_str().expect("Invalid path");
         let table_name = "test_knowledge";
 
-        let conn = connect(db_uri)
-            .await
-            .expect("Failed to connect to LanceDB");
+        let conn = connect(db_uri).await.expect("Failed to connect to LanceDB");
 
         // Create table
         create_table_if_not_exists(&conn, table_name)
@@ -208,9 +201,7 @@ mod tests {
         let db_uri = temp_dir.path().to_str().expect("Invalid path");
         let table_name = "test_idempotent";
 
-        let conn = connect(db_uri)
-            .await
-            .expect("Failed to connect to LanceDB");
+        let conn = connect(db_uri).await.expect("Failed to connect to LanceDB");
 
         // First creation
         create_table_if_not_exists(&conn, table_name)

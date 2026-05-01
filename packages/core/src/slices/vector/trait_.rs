@@ -8,9 +8,9 @@
 //!
 //! Ref: `openspec/changes/refactor-pragmatic-slice-architecture/design.md` - Rule 2
 
-use async_trait::async_trait;
-use crate::kernel::types::{Query, Hit};
 use crate::kernel::errors::AppError;
+use crate::kernel::types::{Hit, Query};
+use async_trait::async_trait;
 
 /// Vector store trait
 ///
@@ -149,8 +149,8 @@ pub trait VectorStoreTrait: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::types::Score;
     use crate::kernel::errors::InfraError;
+    use crate::kernel::types::Score;
 
     /// Mock vector store for testing
     struct MockVectorStore {

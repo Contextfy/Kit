@@ -165,27 +165,19 @@ impl From<AppError> for BridgeError {
 impl From<DomainError> for BridgeError {
     fn from(err: DomainError) -> Self {
         match err {
-            DomainError::InvalidQuery(msg) => {
-                Self::InvalidArgument {
-                    context: msg,
-                    source: None,
-                }
-            }
-            DomainError::NotFound(msg) => {
-                Self::NotFound {
-                    context: msg,
-                    source: None,
-                }
-            }
-            DomainError::NotAllowed(msg) => {
-                Self::InvalidArgument {
-                    context: msg,
-                    source: None,
-                }
-            }
-            DomainError::Other(msg) => {
-                Self::Other(msg)
-            }
+            DomainError::InvalidQuery(msg) => Self::InvalidArgument {
+                context: msg,
+                source: None,
+            },
+            DomainError::NotFound(msg) => Self::NotFound {
+                context: msg,
+                source: None,
+            },
+            DomainError::NotAllowed(msg) => Self::InvalidArgument {
+                context: msg,
+                source: None,
+            },
+            DomainError::Other(msg) => Self::Other(msg),
         }
     }
 }
@@ -194,36 +186,29 @@ impl From<DomainError> for BridgeError {
 impl From<InfraError> for BridgeError {
     fn from(err: InfraError) -> Self {
         match err {
-            InfraError::Database { context, source } => {
-                Self::Runtime {
-                    context: format!("Database error: {}", context),
-                    source,
-                }
-            }
-            InfraError::Io { path, context, source } => {
-                Self::Runtime {
-                    context: format!("IO error at {}: {}", path.display(), context),
-                    source,
-                }
-            }
-            InfraError::Network { context, source } => {
-                Self::Runtime {
-                    context: format!("Network error: {}", context),
-                    source,
-                }
-            }
+            InfraError::Database { context, source } => Self::Runtime {
+                context: format!("Database error: {}", context),
+                source,
+            },
+            InfraError::Io {
+                path,
+                context,
+                source,
+            } => Self::Runtime {
+                context: format!("IO error at {}: {}", path.display(), context),
+                source,
+            },
+            InfraError::Network { context, source } => Self::Runtime {
+                context: format!("Network error: {}", context),
+                source,
+            },
             InfraError::Serialization { context, source } => {
-                Self::Serialization {
-                    context,
-                    source,
-                }
+                Self::Serialization { context, source }
             }
-            InfraError::Other(msg) => {
-                Self::Runtime {
-                    context: format!("Infrastructure error: {}", msg),
-                    source: None,
-                }
-            }
+            InfraError::Other(msg) => Self::Runtime {
+                context: format!("Infrastructure error: {}", msg),
+                source: None,
+            },
         }
     }
 }
@@ -275,12 +260,12 @@ mod tests {
     fn test_bridge_error_source_chain() {
         // Create an error with a source
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-        let bridge_err =
-            BridgeError::runtime("Failed to read file", Some(io_err));
+        let bridge_err = BridgeError::runtime("Failed to read file", Some(io_err));
 
         // The source should be preserved
         assert!(bridge_err.source().is_some());
-        let source_msg = bridge_err.source()
+        let source_msg = bridge_err
+            .source()
             .expect("Test should have a source error")
             .to_string();
         assert!(source_msg.contains("file not found"));

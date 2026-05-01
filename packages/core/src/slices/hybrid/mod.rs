@@ -25,9 +25,9 @@
 //!
 //! Ref: `openspec/changes/refactor-pragmatic-slice-architecture/design.md`
 
-pub mod rrf;
 pub mod orchestrator;
+pub mod rrf;
 
 // Re-export main types at the module level
+pub use orchestrator::{DeleteResult, HybridOrchestrator};
 pub use rrf::{RrfOrchestrator, RrfResult};
-pub use orchestrator::{HybridOrchestrator, DeleteResult};

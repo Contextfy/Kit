@@ -91,15 +91,13 @@ pub fn validate_knowledge_schema(schema: &Schema) -> Result<(), String> {
     // Validate each field comprehensively
     for (idx, expected_field) in expected.fields().iter().enumerate() {
         // Get actual field by index (first ensure we have enough fields)
-        let actual_field = schema
-            .fields()
-            .get(idx)
-            .ok_or_else(|| {
-                format!(
-                    "Missing field at index {}: '{}'",
-                    idx, expected_field.name()
-                )
-            })?;
+        let actual_field = schema.fields().get(idx).ok_or_else(|| {
+            format!(
+                "Missing field at index {}: '{}'",
+                idx,
+                expected_field.name()
+            )
+        })?;
 
         // Validate field name
         if actual_field.name() != expected_field.name() {
@@ -147,14 +145,18 @@ mod tests {
         assert_eq!(schema.fields().len(), 7);
 
         // Verify field names
-        let field_names: Vec<_> = schema
-            .fields()
-            .iter()
-            .map(|f| f.name().as_str())
-            .collect();
+        let field_names: Vec<_> = schema.fields().iter().map(|f| f.name().as_str()).collect();
         assert_eq!(
             field_names,
-            vec!["id", "title", "summary", "content", "vector", "keywords", "source_path"]
+            vec![
+                "id",
+                "title",
+                "summary",
+                "content",
+                "vector",
+                "keywords",
+                "source_path"
+            ]
         );
 
         // Verify id field type
@@ -352,6 +354,9 @@ mod tests {
         ]);
 
         let result = validate_knowledge_schema(&correct_schema);
-        assert!(result.is_ok(), "Schema validation should succeed for correct schema");
+        assert!(
+            result.is_ok(),
+            "Schema validation should succeed for correct schema"
+        );
     }
 }

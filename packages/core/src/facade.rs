@@ -15,8 +15,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::slices::bm25::trait_::Bm25StoreTrait;
-use crate::slices::vector::VectorStoreTrait;
 use crate::slices::hybrid::HybridOrchestrator;
+use crate::slices::vector::VectorStoreTrait;
 
 // Re-export DeleteResult for public API use
 pub use crate::slices::hybrid::DeleteResult;
@@ -74,8 +74,7 @@ pub async fn build_hybrid_orchestrator(
     // Create BM25 store (Tantivy) - private implementation
     let bm25_index = crate::slices::bm25::index::create_bm25_index(index_dir)
         .context("Failed to create BM25 index")?;
-    let bm25_store = TantivyBm25Store::new(bm25_index)
-        .context("Failed to create BM25 store")?;
+    let bm25_store = TantivyBm25Store::new(bm25_index).context("Failed to create BM25 store")?;
 
     // Create Vector store (LanceDB) - private implementation
     let conn = crate::slices::vector::connection::connect(lancedb_uri)
@@ -148,8 +147,7 @@ impl SearchEngine {
         lancedb_uri: &str,
         table_name: &str,
     ) -> Result<Self> {
-        let orchestrator = build_hybrid_orchestrator(index_dir, lancedb_uri, table_name)
-            .await?;
+        let orchestrator = build_hybrid_orchestrator(index_dir, lancedb_uri, table_name).await?;
 
         Ok(Self { orchestrator })
     }
@@ -166,7 +164,11 @@ impl SearchEngine {
     /// # Returns
     ///
     /// Returns ranked search results.
-    pub async fn search(&self, query_text: &str, limit: usize) -> Result<Vec<crate::kernel::types::Hit>> {
+    pub async fn search(
+        &self,
+        query_text: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::kernel::types::Hit>> {
         use crate::kernel::types::Query;
 
         let query = Query::new(query_text.to_string(), limit);
@@ -185,7 +187,14 @@ impl SearchEngine {
     /// * `summary` - Document summary
     /// * `content` - Document content
     /// * `keywords` - Optional space-separated keywords for boosted BM25 ranking
-    pub async fn add(&self, id: &str, title: &str, summary: &str, content: &str, keywords: Option<&str>) -> Result<()> {
+    pub async fn add(
+        &self,
+        id: &str,
+        title: &str,
+        summary: &str,
+        content: &str,
+        keywords: Option<&str>,
+    ) -> Result<()> {
         self.orchestrator
             .add(id, title, summary, content, keywords)
             .await
@@ -272,20 +281,24 @@ impl SearchEngine {
     ///
     /// Returns error if document retrieval fails.
     pub async fn get_documents(&self, ids: &[String]) -> Result<Vec<Option<DocumentDetails>>> {
-        let results = self.orchestrator
+        let results = self
+            .orchestrator
             .bm25_store()
             .get_by_ids(ids)
             .await
             .context("Failed to get documents")?;
 
-        Ok(results.into_iter().map(|opt_result| {
-            opt_result.map(|r| DocumentDetails {
-                id: r.id,
-                title: r.title,
-                summary: r.summary,
-                content: r.content,
+        Ok(results
+            .into_iter()
+            .map(|opt_result| {
+                opt_result.map(|r| DocumentDetails {
+                    id: r.id,
+                    title: r.title,
+                    summary: r.summary,
+                    content: r.content,
+                })
             })
-        }).collect())
+            .collect())
     }
 }
 
@@ -320,12 +333,17 @@ mod tests {
         let lancedb_uri_str = lancedb_uri.to_str().expect("Invalid path");
 
         let orchestrator = build_hybrid_orchestrator(
-            None,  // In-memory BM25
+            None, // In-memory BM25
             lancedb_uri_str,
             "test_knowledge",
-        ).await.expect("Should build hybrid orchestrator");
+        )
+        .await
+        .expect("Should build hybrid orchestrator");
 
-        let is_healthy = orchestrator.health_check().await.expect("Health check should succeed");
+        let is_healthy = orchestrator
+            .health_check()
+            .await
+            .expect("Health check should succeed");
         assert!(is_healthy, "Orchestrator should be healthy");
     }
 
@@ -335,13 +353,14 @@ mod tests {
         let lancedb_uri = temp_dir.path().join("lancedb");
         let lancedb_uri_str = lancedb_uri.to_str().expect("Invalid path");
 
-        let engine = SearchEngine::new(
-            None,
-            lancedb_uri_str,
-            "test_knowledge",
-        ).await.expect("Should create search engine");
+        let engine = SearchEngine::new(None, lancedb_uri_str, "test_knowledge")
+            .await
+            .expect("Should create search engine");
 
-        let is_healthy = engine.health_check().await.expect("Health check should succeed");
+        let is_healthy = engine
+            .health_check()
+            .await
+            .expect("Health check should succeed");
         assert!(is_healthy, "Engine should be healthy");
     }
 
@@ -351,28 +370,35 @@ mod tests {
         let lancedb_uri = temp_dir.path().join("lancedb");
         let lancedb_uri_str = lancedb_uri.to_str().expect("Invalid path");
 
-        let engine = SearchEngine::new(
-            None,
-            lancedb_uri_str,
-            "test_add",
-        ).await.expect("Failed to create engine");
+        let engine = SearchEngine::new(None, lancedb_uri_str, "test_add")
+            .await
+            .expect("Failed to create engine");
 
         // Add document
-        engine.add(
-            "doc-1",
-            "Rust Programming",
-            "A guide to Rust",
-            "Rust is a systems programming language",
-            None,
-        ).await.expect("Should add document");
+        engine
+            .add(
+                "doc-1",
+                "Rust Programming",
+                "A guide to Rust",
+                "Rust is a systems programming language",
+                None,
+            )
+            .await
+            .expect("Should add document");
 
         // Search (Note: BM25 index needs commit which is handled internally)
-        let results = engine.search("Rust", 10).await.expect("Search should not error");
+        let results = engine
+            .search("Rust", 10)
+            .await
+            .expect("Search should not error");
         // Search may return 0 or 1 results depending on index timing
         // We're just verifying the search operation doesn't panic
         assert!(results.len() <= 1, "Search should return at most 1 result");
         if results.len() == 1 {
-            assert_eq!(results[0].id, "doc-1", "Should find the document we just added");
+            assert_eq!(
+                results[0].id, "doc-1",
+                "Should find the document we just added"
+            );
         }
     }
 }

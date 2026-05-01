@@ -12,13 +12,13 @@
 //! Ref: `openspec/changes/refactor-pragmatic-slice-architecture/design.md`
 
 use std::sync::Arc;
-use tracing::{warn, error, info};
+use tracing::{error, info, warn};
 
-use crate::kernel::types::{Query, Hit};
 use crate::kernel::errors::{AppError, DomainError};
+use crate::kernel::types::{Hit, Query};
 
-use super::super::vector::VectorStoreTrait;
 use super::super::bm25::Bm25StoreTrait;
+use super::super::vector::VectorStoreTrait;
 use super::rrf::RrfOrchestrator;
 
 /// Result of a hybrid delete operation
@@ -34,12 +34,18 @@ pub struct DeleteResult {
 impl DeleteResult {
     /// Check if at least one backend succeeded in deletion
     pub fn any_success(&self) -> bool {
-        matches!((&self.vector_deleted, &self.bm25_deleted), (Ok(true), _) | (_, Ok(true)))
+        matches!(
+            (&self.vector_deleted, &self.bm25_deleted),
+            (Ok(true), _) | (_, Ok(true))
+        )
     }
 
     /// Check if both backends succeeded in deletion
     pub fn both_success(&self) -> bool {
-        matches!((&self.vector_deleted, &self.bm25_deleted), (Ok(true), Ok(true)))
+        matches!(
+            (&self.vector_deleted, &self.bm25_deleted),
+            (Ok(true), Ok(true))
+        )
     }
 
     /// Get the first error encountered, if any
@@ -168,10 +174,14 @@ impl HybridOrchestrator {
                 // Both searches succeeded - perform RRF fusion
                 // Fuse results using RRF (no .clone() - move ownership)
                 let fused = if !v.is_empty() && !b.is_empty() {
-                    self.rrf.fuse_two(v, b)  // Move ownership, zero copy
-                        .map_err(|e| AppError::Domain(DomainError::Other(format!(
-                            "RRF fusion failed: {}", e
-                        ))))?
+                    self.rrf
+                        .fuse_two(v, b) // Move ownership, zero copy
+                        .map_err(|e| {
+                            AppError::Domain(DomainError::Other(format!(
+                                "RRF fusion failed: {}",
+                                e
+                            )))
+                        })?
                         .into_iter()
                         .map(|r| r.to_hit())
                         .collect()
@@ -248,7 +258,8 @@ impl HybridOrchestrator {
         // Add to both stores in parallel
         let (vector_result, bm25_result) = tokio::join!(
             self.vector_store.add(id, content, Some(&metadata)),
-            self.bm25_store.add(id, title, summary, content, keywords.unwrap_or(""))
+            self.bm25_store
+                .add(id, title, summary, content, keywords.unwrap_or(""))
         );
 
         // Handle all four states with compensating rollback to prevent orphan documents
@@ -334,10 +345,8 @@ impl HybridOrchestrator {
     /// ```
     pub async fn delete(&self, id: &str) -> DeleteResult {
         // Delete from both stores in parallel
-        let (vector_result, bm25_result) = tokio::join!(
-            self.vector_store.delete(id),
-            self.bm25_store.delete(id)
-        );
+        let (vector_result, bm25_result) =
+            tokio::join!(self.vector_store.delete(id), self.bm25_store.delete(id));
 
         // Preserve individual results - don't suppress errors
         let vector_deleted = match vector_result {
@@ -406,10 +415,10 @@ impl HybridOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use crate::kernel::types::Score;
     use crate::kernel::errors::{AppError, InfraError};
+    use crate::kernel::types::Score;
     use crate::slices::bm25::trait_::Bm25Result;
+    use async_trait::async_trait;
 
     // Local mock implementations for testing
     struct MockVectorStore {
@@ -494,8 +503,18 @@ mod tests {
             }
 
             let results = vec![
-                Bm25Result::new("bm25-doc1".to_string(), "Title 1".to_string(), "Summary 1".to_string(), Score::new(0.9)),
-                Bm25Result::new("bm25-doc2".to_string(), "Title 2".to_string(), "Summary 2".to_string(), Score::new(0.8)),
+                Bm25Result::new(
+                    "bm25-doc1".to_string(),
+                    "Title 1".to_string(),
+                    "Summary 1".to_string(),
+                    Score::new(0.9),
+                ),
+                Bm25Result::new(
+                    "bm25-doc2".to_string(),
+                    "Title 2".to_string(),
+                    "Summary 2".to_string(),
+                    Score::new(0.8),
+                ),
             ];
             Ok(Some(results))
         }
@@ -592,7 +611,9 @@ mod tests {
     #[tokio::test]
     async fn test_hybrid_add() {
         let orchestrator = create_test_orchestrator().await;
-        let result = orchestrator.add("id", "title", "summary", "content", None).await;
+        let result = orchestrator
+            .add("id", "title", "summary", "content", None)
+            .await;
         assert!(result.is_ok());
     }
 
@@ -636,12 +657,18 @@ mod tests {
         let query = Query::new("test query", 10);
 
         let result = orchestrator.search(&query).await;
-        assert!(result.is_ok(), "Should return Ok when BM25 succeeds even if vector fails");
+        assert!(
+            result.is_ok(),
+            "Should return Ok when BM25 succeeds even if vector fails"
+        );
 
         let hits = result.unwrap();
         assert!(!hits.is_empty(), "Should return BM25 results");
         // Should contain BM25 document IDs
-        assert!(hits.iter().any(|h| h.id.starts_with("bm25-doc")), "Should have BM25 results");
+        assert!(
+            hits.iter().any(|h| h.id.starts_with("bm25-doc")),
+            "Should have BM25 results"
+        );
     }
 
     #[tokio::test]
@@ -665,10 +692,16 @@ mod tests {
         let query = Query::new("test query", 10);
 
         let result = orchestrator.search(&query).await;
-        assert!(result.is_ok(), "Should return Ok when both stores return empty, not an error");
+        assert!(
+            result.is_ok(),
+            "Should return Ok when both stores return empty, not an error"
+        );
 
         let hits = result.unwrap();
-        assert!(hits.is_empty(), "Should return empty array when no results found");
+        assert!(
+            hits.is_empty(),
+            "Should return empty array when no results found"
+        );
     }
 
     #[tokio::test]
@@ -715,12 +748,21 @@ mod tests {
         let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
         let result = orchestrator.delete("test-id").await;
 
-        assert!(!result.both_success(), "Should not have both success when vector fails");
+        assert!(
+            !result.both_success(),
+            "Should not have both success when vector fails"
+        );
         assert!(result.any_success(), "Should have BM25 success");
         assert!(result.first_error().is_some(), "Should have vector error");
 
-        assert!(matches!(result.vector_deleted, Err(_)), "Vector delete should fail");
-        assert!(matches!(result.bm25_deleted, Ok(true)), "BM25 delete should succeed");
+        assert!(
+            matches!(result.vector_deleted, Err(_)),
+            "Vector delete should fail"
+        );
+        assert!(
+            matches!(result.bm25_deleted, Ok(true)),
+            "BM25 delete should succeed"
+        );
     }
 
     #[tokio::test]
@@ -743,12 +785,21 @@ mod tests {
         let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
         let result = orchestrator.delete("test-id").await;
 
-        assert!(!result.both_success(), "Should not have both success when BM25 fails");
+        assert!(
+            !result.both_success(),
+            "Should not have both success when BM25 fails"
+        );
         assert!(result.any_success(), "Should have vector success");
         assert!(result.first_error().is_some(), "Should have BM25 error");
 
-        assert!(matches!(result.vector_deleted, Ok(true)), "Vector delete should succeed");
-        assert!(matches!(result.bm25_deleted, Err(_)), "BM25 delete should fail");
+        assert!(
+            matches!(result.vector_deleted, Ok(true)),
+            "Vector delete should succeed"
+        );
+        assert!(
+            matches!(result.bm25_deleted, Err(_)),
+            "BM25 delete should fail"
+        );
     }
 
     #[tokio::test]
@@ -765,17 +816,22 @@ mod tests {
             should_fail: false,
             empty_results: false,
             delete_should_fail: false,
-            add_should_fail: true,  // BM25 add will fail
+            add_should_fail: true, // BM25 add will fail
         });
 
         let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
-        let result = orchestrator.add("test-id", "title", "summary", "content", None).await;
+        let result = orchestrator
+            .add("test-id", "title", "summary", "content", None)
+            .await;
 
         assert!(result.is_err(), "Should return error when BM25 add fails");
 
         // Verify that the error is from BM25
         let error = result.unwrap_err();
-        assert!(matches!(error, AppError::Infra(_)), "Should be an Infra error from BM25");
+        assert!(
+            matches!(error, AppError::Infra(_)),
+            "Should be an Infra error from BM25"
+        );
 
         // Note: We can't directly verify the rollback happened without more sophisticated mocking,
         // but the test ensures the error path is exercised and rollback code is executed.
@@ -788,7 +844,7 @@ mod tests {
             should_fail: false,
             empty_results: false,
             delete_should_fail: false,
-            add_should_fail: true,  // Vector add will fail
+            add_should_fail: true, // Vector add will fail
         });
 
         let bm25_store = Arc::new(MockBm25Store {
@@ -799,13 +855,18 @@ mod tests {
         });
 
         let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
-        let result = orchestrator.add("test-id", "title", "summary", "content", None).await;
+        let result = orchestrator
+            .add("test-id", "title", "summary", "content", None)
+            .await;
 
         assert!(result.is_err(), "Should return error when Vector add fails");
 
         // Verify that the error is from Vector
         let error = result.unwrap_err();
-        assert!(matches!(error, AppError::Infra(_)), "Should be an Infra error from Vector");
+        assert!(
+            matches!(error, AppError::Infra(_)),
+            "Should be an Infra error from Vector"
+        );
 
         // Note: We can't directly verify the rollback happened without more sophisticated mocking,
         // but the test ensures the error path is exercised and rollback code is executed.

@@ -187,7 +187,10 @@ mod tests {
         let domain_err = DomainError::not_found("test");
         let app_err: AppError = domain_err.into();
         assert!(matches!(app_err, AppError::Domain(_)));
-        assert_eq!(app_err.to_string(), "domain error: resource not found: test");
+        assert_eq!(
+            app_err.to_string(),
+            "domain error: resource not found: test"
+        );
     }
 
     #[test]
@@ -195,7 +198,10 @@ mod tests {
         let infra_err = InfraError::database("query failed", None::<std::io::Error>);
         let app_err: AppError = infra_err.into();
         assert!(matches!(app_err, AppError::Infra(_)));
-        assert_eq!(app_err.to_string(), "infrastructure error: database error: query failed");
+        assert_eq!(
+            app_err.to_string(),
+            "infrastructure error: database error: query failed"
+        );
     }
 
     #[test]
