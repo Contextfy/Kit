@@ -37,10 +37,6 @@ pub(crate) mod schema;
 pub(crate) mod connection;
 pub(crate) mod lancedb_impl;
 
-// Export schema validation function for use by deprecated lancedb_store module
-// during the transition period (will be removed once lancedb_store is fully migrated)
-pub use schema::validate_knowledge_schema;
-
 // **MANDATORY**: Only export the trait, NOT concrete implementations
 // Concrete types like LanceDbStore must not be accessible from outside this slice
 pub use trait_::VectorStoreTrait;

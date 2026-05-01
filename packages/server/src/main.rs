@@ -231,7 +231,7 @@ async fn document_handler(
             Ok(Json(DocumentResponse {
                 id: doc.id,
                 title: doc.title,
-                content: doc.content,
+                content: doc.content.unwrap_or_default(),
             }))
         }
         Ok(None) => {

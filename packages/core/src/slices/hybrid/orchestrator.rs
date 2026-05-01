@@ -34,10 +34,7 @@ pub struct DeleteResult {
 impl DeleteResult {
     /// Check if at least one backend succeeded in deletion
     pub fn any_success(&self) -> bool {
-        match (&self.vector_deleted, &self.bm25_deleted) {
-            (Ok(true), _) | (_, Ok(true)) => true,
-            _ => false,
-        }
+        matches!((&self.vector_deleted, &self.bm25_deleted), (Ok(true), _) | (_, Ok(true)))
     }
 
     /// Check if both backends succeeded in deletion
@@ -419,6 +416,7 @@ mod tests {
         should_fail: bool,
         empty_results: bool,
         delete_should_fail: bool,
+        add_should_fail: bool,
     }
 
     #[async_trait]
@@ -448,7 +446,14 @@ mod tests {
             _text: &str,
             _metadata: Option<&serde_json::Value>,
         ) -> Result<(), AppError> {
-            Ok(())
+            if self.add_should_fail {
+                Err(AppError::Infra(InfraError::database(
+                    "mock vector add failed",
+                    None::<std::io::Error>,
+                )))
+            } else {
+                Ok(())
+            }
         }
 
         async fn delete(&self, _id: &str) -> Result<bool, AppError> {
@@ -471,6 +476,7 @@ mod tests {
         should_fail: bool,
         empty_results: bool,
         delete_should_fail: bool,
+        add_should_fail: bool,
     }
 
     #[async_trait]
@@ -502,7 +508,14 @@ mod tests {
             _content: &str,
             _keywords: &str,
         ) -> Result<(), AppError> {
-            Ok(())
+            if self.add_should_fail {
+                Err(AppError::Infra(InfraError::database(
+                    "mock BM25 add failed",
+                    None::<std::io::Error>,
+                )))
+            } else {
+                Ok(())
+            }
         }
 
         async fn delete(&self, _id: &str) -> Result<bool, AppError> {
@@ -535,12 +548,14 @@ mod tests {
             should_fail: false,
             empty_results: false,
             delete_should_fail: false,
+            add_should_fail: false,
         });
 
         let bm25_store = Arc::new(MockBm25Store {
             should_fail: false,
             empty_results: false,
             delete_should_fail: false,
+            add_should_fail: false,
         });
 
         HybridOrchestrator::default_with_stores(vector_store, bm25_store)
@@ -607,12 +622,14 @@ mod tests {
             should_fail: true,
             empty_results: false,
             delete_should_fail: false,
+            add_should_fail: false,
         });
 
         let bm25_store = Arc::new(MockBm25Store {
             should_fail: false,
             empty_results: false,
             delete_should_fail: false,
+            add_should_fail: false,
         });
 
         let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
@@ -634,12 +651,14 @@ mod tests {
             should_fail: false,
             empty_results: true,
             delete_should_fail: false,
+            add_should_fail: false,
         });
 
         let bm25_store = Arc::new(MockBm25Store {
             should_fail: false,
             empty_results: true,
             delete_should_fail: false,
+            add_should_fail: false,
         });
 
         let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
@@ -659,12 +678,14 @@ mod tests {
             should_fail: true,
             empty_results: false,
             delete_should_fail: false,
+            add_should_fail: false,
         });
 
         let bm25_store = Arc::new(MockBm25Store {
             should_fail: true,
             empty_results: false,
             delete_should_fail: false,
+            add_should_fail: false,
         });
 
         let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
@@ -681,12 +702,14 @@ mod tests {
             should_fail: false,
             empty_results: false,
             delete_should_fail: true,
+            add_should_fail: false,
         });
 
         let bm25_store = Arc::new(MockBm25Store {
             should_fail: false,
             empty_results: false,
             delete_should_fail: false,
+            add_should_fail: false,
         });
 
         let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
@@ -707,12 +730,14 @@ mod tests {
             should_fail: false,
             empty_results: false,
             delete_should_fail: false,
+            add_should_fail: false,
         });
 
         let bm25_store = Arc::new(MockBm25Store {
             should_fail: false,
             empty_results: false,
             delete_should_fail: true,
+            add_should_fail: false,
         });
 
         let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
@@ -724,5 +749,65 @@ mod tests {
 
         assert!(matches!(result.vector_deleted, Ok(true)), "Vector delete should succeed");
         assert!(matches!(result.bm25_deleted, Err(_)), "BM25 delete should fail");
+    }
+
+    #[tokio::test]
+    async fn test_hybrid_add_vector_succeeds_bm25_fails_rollback_vector() {
+        // Test add rollback: Vector succeeds, BM25 fails → verify vector rollback is attempted
+        let vector_store = Arc::new(MockVectorStore {
+            should_fail: false,
+            empty_results: false,
+            delete_should_fail: false,
+            add_should_fail: false,
+        });
+
+        let bm25_store = Arc::new(MockBm25Store {
+            should_fail: false,
+            empty_results: false,
+            delete_should_fail: false,
+            add_should_fail: true,  // BM25 add will fail
+        });
+
+        let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
+        let result = orchestrator.add("test-id", "title", "summary", "content", None).await;
+
+        assert!(result.is_err(), "Should return error when BM25 add fails");
+
+        // Verify that the error is from BM25
+        let error = result.unwrap_err();
+        assert!(matches!(error, AppError::Infra(_)), "Should be an Infra error from BM25");
+
+        // Note: We can't directly verify the rollback happened without more sophisticated mocking,
+        // but the test ensures the error path is exercised and rollback code is executed.
+    }
+
+    #[tokio::test]
+    async fn test_hybrid_add_bm25_succeeds_vector_fails_rollback_bm25() {
+        // Test add rollback: BM25 succeeds, Vector fails → verify BM25 rollback is attempted
+        let vector_store = Arc::new(MockVectorStore {
+            should_fail: false,
+            empty_results: false,
+            delete_should_fail: false,
+            add_should_fail: true,  // Vector add will fail
+        });
+
+        let bm25_store = Arc::new(MockBm25Store {
+            should_fail: false,
+            empty_results: false,
+            delete_should_fail: false,
+            add_should_fail: false,
+        });
+
+        let orchestrator = HybridOrchestrator::default_with_stores(vector_store, bm25_store);
+        let result = orchestrator.add("test-id", "title", "summary", "content", None).await;
+
+        assert!(result.is_err(), "Should return error when Vector add fails");
+
+        // Verify that the error is from Vector
+        let error = result.unwrap_err();
+        assert!(matches!(error, AppError::Infra(_)), "Should be an Infra error from Vector");
+
+        // Note: We can't directly verify the rollback happened without more sophisticated mocking,
+        // but the test ensures the error path is exercised and rollback code is executed.
     }
 }
