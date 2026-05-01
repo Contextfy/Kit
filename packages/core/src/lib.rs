@@ -2,6 +2,7 @@ pub mod bridge;
 pub mod embeddings;
 pub mod facade;
 pub mod kernel;
+pub mod migration;
 pub mod parser;
 // Private implementation module - only specific types are re-exported below
 mod slices;
