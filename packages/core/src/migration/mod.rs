@@ -371,32 +371,48 @@ async fn create_table_if_not_exists(
 
 /// Create vector index on the table
 async fn create_vector_index(
-    _conn: &lancedb::connection::Connection,
+    conn: &lancedb::connection::Connection,
     table_name: &str,
 ) -> Result<(), MigrationError> {
-    // Note: LanceDB 0.26.2 Rust SDK does not fully support index creation yet.
-    // Vector search will still work without an index, just slower.
-    //
-    // Users can manually create an index later using the Python SDK:
-    //
-    // ```python
-    // import lancedb
-    // db = lancedb.connect("<uri>")
-    // table = db.open_table("<table_name>")
-    // table.create_index("vector", index_type="IVF_PQ")
-    // ```
+    use lancedb::index::Index;
+    use lancedb::index::vector::IvfPqIndexBuilder;
 
-    eprintln!("⚠️  Vector index creation skipped");
-    eprintln!("   LanceDB 0.26.2 Rust SDK does not support index creation");
-    eprintln!("   Table '{}': Vector search will work, just slower", table_name);
-    eprintln!();
-    eprintln!("   To create an index manually, use the LanceDB Python SDK:");
-    eprintln!("   ```python");
-    eprintln!("   import lancedb");
-    eprintln!("   db = lancedb.connect(\"<uri>\")");
-    eprintln!("   table = db.open_table(\"{}\")", table_name);
-    eprintln!("   table.create_index(\"vector\", index_type=\"IVF_PQ\")");
-    eprintln!("   ```");
+    println!("⏳ Creating vector index for faster searches...");
+
+    // Open the table
+    let table = conn
+        .open_table(table_name)
+        .execute()
+        .await
+        .map_err(MigrationError::LanceDbError)?;
+
+    // Create IVF PQ index on the "vector" column
+    //
+    // IVF (Inverted File Index) partitions vectors into groups
+    // PQ (Product Quantization) compresses vectors for faster search
+    //
+    // Parameters for 384-dimensional vectors (BGE-small-en-v1.5):
+    // - num_partitions: 256 (suitable for small to medium datasets)
+    // - num_sub_vectors: 24 (384 / 16 = 24, optimal for SIMD)
+    //
+    // This provides a good balance between:
+    // - Index size (memory usage)
+    // - Build time (computation cost)
+    // - Search accuracy vs speed trade-off
+    let index_builder = IvfPqIndexBuilder::default()
+        .num_partitions(256)
+        .num_sub_vectors(24);
+
+    table
+        .create_index(&["vector"], Index::IvfPq(index_builder))
+        .execute()
+        .await
+        .map_err(MigrationError::LanceDbError)?;
+
+    println!("✓ Vector index created successfully!");
+    println!("  Index type: IVF_PQ");
+    println!("  Partitions: 256");
+    println!("  Sub-vectors: 24");
 
     Ok(())
 }
