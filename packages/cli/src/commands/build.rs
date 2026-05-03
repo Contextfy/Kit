@@ -101,7 +101,10 @@ pub async fn build() -> Result<()> {
                         // Safe character boundary truncation
                         let summary_truncated = doc.summary.chars().take(200).collect::<String>();
 
-                        if let Err(e) = engine.add(&id, &doc.title, &summary_truncated, &doc.content, None).await {
+                        if let Err(e) = engine
+                            .add(&id, &doc.title, &summary_truncated, &doc.content, None)
+                            .await
+                        {
                             eprintln!("  ✗ Failed to add {}: {}", id, e);
                             parse_errors += 1;
                         } else {
@@ -116,15 +119,19 @@ pub async fn build() -> Result<()> {
                             global_id_counter += 1;
 
                             // Safe character boundary truncation
-                            let summary_truncated = section.summary.chars().take(200).collect::<String>();
+                            let summary_truncated =
+                                section.summary.chars().take(200).collect::<String>();
 
-                            if let Err(e) = engine.add(
-                                &id,
-                                &section.section_title,
-                                &summary_truncated,
-                                &section.content,
-                                None,
-                            ).await {
+                            if let Err(e) = engine
+                                .add(
+                                    &id,
+                                    &section.section_title,
+                                    &summary_truncated,
+                                    &section.content,
+                                    None,
+                                )
+                                .await
+                            {
                                 eprintln!("  ✗ Failed to add section {}: {}", id, e);
                                 parse_errors += 1;
                             } else {

@@ -12,8 +12,9 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+use crate::embeddings::EmbeddingModel;
 use crate::slices::bm25::trait_::Bm25StoreTrait;
 use crate::slices::hybrid::HybridOrchestrator;
 use crate::slices::vector::VectorStoreTrait;
@@ -24,6 +25,40 @@ pub use crate::slices::hybrid::DeleteResult;
 // Private concrete implementations - invisible to external code
 use crate::slices::bm25::tantivy_impl::TantivyBm25Store;
 use crate::slices::vector::lancedb_impl::LanceDbStore;
+
+/// Get or initialize the shared embedding model singleton
+///
+/// This function implements the "initialize once, clone Arc" pattern:
+/// - First call: Downloads and loads BGE-small-en model (1-5 minutes on cold start)
+/// - Subsequent calls: Returns cloned Arc in microseconds
+///
+/// # Returns
+///
+/// Returns a cloned Arc pointing to the shared EmbeddingModel.
+///
+/// # Errors
+///
+/// Returns error if the initial model creation fails.
+fn shared_embedding_model() -> Result<Arc<EmbeddingModel>> {
+    // Use get_or_init with a mutable static cell for error handling
+    // OnceLock::get_or_try_init is unstable, so we use get_or_init with interior mutability
+    static EMBEDDING_MODEL_CELL: OnceLock<std::sync::Mutex<Option<Arc<EmbeddingModel>>>> = OnceLock::new();
+
+    let cell = EMBEDDING_MODEL_CELL.get_or_init(|| std::sync::Mutex::new(None));
+    let mut guard = cell.lock().map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+
+    if let Some(model) = guard.as_ref() {
+        // Already initialized, return clone
+        Ok(Arc::clone(model))
+    } else {
+        // First initialization
+        let model = EmbeddingModel::new()
+            .map(Arc::new)
+            .context("Failed to initialize shared embedding model")?;
+        *guard = Some(model.clone());
+        Ok(model)
+    }
+}
 
 /// Create a hybrid search orchestrator with default backends
 ///
@@ -86,7 +121,11 @@ pub async fn build_hybrid_orchestrator(
         .await
         .context("Failed to create LanceDB table")?;
 
-    let vector_store = LanceDbStore::new(conn, table_name);
+    // Use shared embedding model (singleton pattern, initialized once)
+    let embedding_model = shared_embedding_model()
+        .context("Failed to get shared embedding model")?;
+
+    let vector_store = LanceDbStore::new(conn, table_name, embedding_model);
 
     // Wrap in Arc for trait object sharing
     let bm25_store: Arc<dyn Bm25StoreTrait> = Arc::new(bm25_store);

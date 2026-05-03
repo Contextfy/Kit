@@ -148,12 +148,10 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Server listening on http://127.0.0.1:3000");
     tracing::info!("Web UI available at http://127.0.0.1:3000/");
 
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = ?e, "Server error");
-            anyhow::anyhow!("Server error: {}", e)
-        })?;
+    axum::serve(listener, app).await.map_err(|e| {
+        tracing::error!(error = ?e, "Server error");
+        anyhow::anyhow!("Server error: {}", e)
+    })?;
 
     Ok(())
 }
@@ -188,10 +186,7 @@ async fn search_handler(
         return Err(ApiError::bad_request("Search query cannot be empty"));
     }
 
-    tracing::info!(
-        query_length = query_text.len(),
-        "Search request received"
-    );
+    tracing::info!(query_length = query_text.len(), "Search request received");
 
     let engine_guard = engine.read().await;
 
@@ -212,7 +207,9 @@ async fn search_handler(
         }
         Err(e) => {
             tracing::error!(error = ?e, query_length = query_text.len(), "Search failed");
-            Err(ApiError::internal("Failed to process search request due to an internal error"))
+            Err(ApiError::internal(
+                "Failed to process search request due to an internal error",
+            ))
         }
     }
 }
@@ -236,11 +233,16 @@ async fn document_handler(
         }
         Ok(None) => {
             tracing::warn!(doc_id = %doc_id, "Document not found");
-            Err(ApiError::not_found(format!("Document with ID '{}' was not found", doc_id)))
+            Err(ApiError::not_found(format!(
+                "Document with ID '{}' was not found",
+                doc_id
+            )))
         }
         Err(e) => {
             tracing::error!(error = ?e, doc_id = %doc_id, "Failed to retrieve document");
-            Err(ApiError::internal("Failed to retrieve document due to an internal error"))
+            Err(ApiError::internal(
+                "Failed to retrieve document due to an internal error",
+            ))
         }
     }
 }
