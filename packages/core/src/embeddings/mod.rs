@@ -47,6 +47,27 @@ use anyhow::Context;
 use fastembed::{EmbeddingModel as FastEmbedModel, InitOptions, TextEmbedding};
 use std::sync::Mutex;
 
+/// Private trait abstracting over different embedding implementations
+///
+/// This trait allows us to use either real FastEmbed TextEmbedding or fake test embeddings
+/// interchangeably within the EmbeddingModel.
+trait EmbeddingInner: Send + Sync {
+    /// Generate embeddings for a batch of texts
+    fn embed(&mut self, texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>>;
+}
+
+/// Wrapper for FastEmbed's TextEmbedding to implement our EmbeddingInner trait
+struct RealEmbeddingWrapper(TextEmbedding);
+
+impl EmbeddingInner for RealEmbeddingWrapper {
+    fn embed(&mut self, texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
+        // Delegate to the real TextEmbedding implementation
+        self.0
+            .embed(texts, None)
+            .map_err(|e| anyhow::anyhow!("FastEmbed embedding failed: {}", e))
+    }
+}
+
 /// Text embedding model wrapper.
 ///
 /// Wraps FastEmbed's `TextEmbedding` with a simplified API optimized for
@@ -66,7 +87,7 @@ use std::sync::Mutex;
 /// - **Per-query**: < 100ms for single text (after first call)
 /// - **Concurrency**: Thread-safe via Mutex with minimal contention (embedding is CPU-bound)
 pub struct EmbeddingModel {
-    inner: Mutex<TextEmbedding>,
+    inner: Mutex<Box<dyn EmbeddingInner>>,
 }
 
 impl EmbeddingModel {
@@ -101,7 +122,7 @@ impl EmbeddingModel {
         .context("Failed to initialize FastEmbed TextEmbedding with BGE-small-en-v1.5")?;
 
         Ok(Self {
-            inner: Mutex::new(inner),
+            inner: Mutex::new(Box::new(RealEmbeddingWrapper(inner))),
         })
     }
 
@@ -136,7 +157,7 @@ impl EmbeddingModel {
         // This avoids the expensive model download and initialization
         let fake_inner = FakeTextEmbedding::new();
         Self {
-            inner: Mutex::new(fake_inner),
+            inner: Mutex::new(Box::new(fake_inner)),
         }
     }
 
@@ -187,7 +208,7 @@ impl EmbeddingModel {
         // FastEmbed's embed method accepts Vec<&str> and returns Vec<Vec<f32>>
         // We wrap the single text in an array and extract the first result safely
         let embeddings = inner
-            .embed(vec![text], None)
+            .embed(vec![text])
             .context("Failed to generate embedding for text")?;
 
         // Safely extract the first (and only) embedding from the batch result
@@ -268,7 +289,7 @@ impl EmbeddingModel {
 
         // 直接调用 FastEmbed 的批处理接口
         let embeddings = inner
-            .embed(texts, None)
+            .embed(texts.to_vec())
             .context("Failed to generate embeddings for batch")?;
 
         // 契约防线：校验返回的向量数量是否等于输入的文本数量
@@ -314,9 +335,12 @@ impl FakeTextEmbedding {
     fn new() -> Self {
         Self
     }
+}
 
+#[cfg(test)]
+impl EmbeddingInner for FakeTextEmbedding {
     /// Mimics fastembed's embed() method but returns deterministic fake vectors
-    fn embed(&self, texts: Vec<&str>, _options: Option<fastembed::EmbeddingOptions>) -> anyhow::Result<Vec<Vec<f32>>> {
+    fn embed(&mut self, texts: Vec<&str>) -> anyhow::Result<Vec<Vec<f32>>> {
         texts
             .iter()
             .map(|&text| {

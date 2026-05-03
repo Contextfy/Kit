@@ -1288,7 +1288,7 @@ async fn run_evaluation(queries: &[TestQuery], engine: &SearchEngine) -> Vec<Eva
 }
 
 /// Generate markdown report
-fn generate_markdown_report(results: &[EvalResult], output_path: &str) -> std::io::Result<()> {
+fn generate_markdown_report(results: &[EvalResult], corpus_size: usize, output_path: &str) -> std::io::Result<()> {
     use std::fs::File;
     use std::io::Write;
     use chrono::Utc;
@@ -1347,10 +1347,18 @@ fn generate_markdown_report(results: &[EvalResult], output_path: &str) -> std::i
         "| Accuracy@5 | {:.1}% | {:.1}% | **{:+.1}%** |",
         bm25_acc5, hybrid_acc5, hybrid_acc5 - bm25_acc5
     )?;
+
+    // Calculate relative NDCG improvement percentage
+    let ndcg_improvement = if bm25_ndcg > 0.0 {
+        ((hybrid_ndcg - bm25_ndcg) / bm25_ndcg) * 100.0
+    } else {
+        0.0
+    };
+
     writeln!(
         file,
-        "| NDCG@3 | {:.3} | {:.3} | **{:+.3}%** |",
-        bm25_ndcg, hybrid_ndcg, (hybrid_ndcg - bm25_ndcg) * 100.0
+        "| NDCG@3 | {:.3} | {:.3} | **{:+.1}%** |",
+        bm25_ndcg, hybrid_ndcg, ndcg_improvement
     )?;
 
     // Detailed comparison section
@@ -1428,7 +1436,7 @@ fn generate_markdown_report(results: &[EvalResult], output_path: &str) -> std::i
     writeln!(file, "\n## 🔍 技术细节")?;
     writeln!(file, "\n**测试配置**:")?;
     writeln!(file, "- 查询数量: {}", results.len())?;
-    writeln!(file, "- 文档数量: 60")?;
+    writeln!(file, "- 文档数量: {}", corpus_size)?;
     writeln!(file, "- 评估指标: Accuracy@1/3/5, NDCG@3")?;
     writeln!(file, "- 相关性评分: 多级评分制 (0-3分)")?;
 
@@ -1568,13 +1576,11 @@ async fn test_semantic_search_evaluation() {
         println!("Real-world queries with partial vocabulary overlap expected to perform better.");
     }
 
-    // Generate report
+    // Generate report (FAIL FAST if report generation fails - it's a critical deliverable)
     let report_path = "docs/SEMANTIC_EVALUATION_REPORT.md";
-    if let Err(e) = generate_markdown_report(&results, report_path) {
-        eprintln!("Warning: Failed to generate report: {}", e);
-    } else {
-        println!("\n✓ Generated report: {}", report_path);
-    }
+    generate_markdown_report(&results, docs.len(), report_path)
+        .expect("Failed to generate markdown report");
+    println!("\n✓ Generated report: {}", report_path);
 
     println!("\n{}", "=".repeat(60));
 }
@@ -1752,7 +1758,7 @@ mod unit_tests {
         }];
 
         // Should not panic even with minimal data
-        let result = generate_markdown_report(&results, "/tmp/test_report.md");
+        let result = generate_markdown_report(&results, 53, "/tmp/test_report.md");
         // Result may be Ok or Err, but should not panic
         match result {
             Ok(_) => println!("✓ Report generation succeeded"),

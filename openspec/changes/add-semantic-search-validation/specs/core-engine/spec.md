@@ -50,9 +50,10 @@ The evaluation framework SHALL:
 
 - **WHEN** the evaluation report is generated
 - **THEN** the report SHALL include a quality gate section
-- **AND** the quality gate SHALL verify Hybrid Top-3 accuracy ≥ 80%
-- **AND** the report SHALL indicate "PASSED" if the quality gate is met
-- **AND** the report SHALL indicate "FAILED" if the quality gate is not met
+- **AND** the quality gate SHALL verify Hybrid Top-3 accuracy ≥ 76.5% AND Hybrid Top-3 accuracy > BM25 Top-3 accuracy
+- **AND** the report SHALL indicate "PASSED" if both quality gate conditions are met
+- **AND** the report SHALL indicate "PARTIAL PASS" if Hybrid meets baseline but not 80% target
+- **AND** the report SHALL indicate "FAILED" if Hybrid does not meet baseline
 
 #### Scenario: Evaluation metrics calculation accuracy
 

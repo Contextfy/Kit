@@ -73,10 +73,12 @@ let vector_array = FixedSizeListArray::new(
 #### 3. **Facade 集成** (`packages/core/src/facade.rs`)
 
 ```rust
-// EmbeddingModel 创建一次并共享
-let embedding_model = Arc::new(EmbeddingModel::new()?);
+// EmbeddingModel 单例缓存 - 只初始化一次，后续调用复用 Arc
+let embedding_model = shared_embedding_model()?;
 let vector_store = LanceDbStore::new(conn, table_name, embedding_model);
 ```
+
+**优化说明**：使用 `OnceLock<Mutex<Option<Arc<EmbeddingModel>>>>` 全局缓存，避免每次调用 `build_hybrid_orchestrator` 时重复下载 BGE 模型（100-400MB）。首次调用后，模型缓存在内存中，后续调用直接返回克隆的 Arc。
 
 ---
 

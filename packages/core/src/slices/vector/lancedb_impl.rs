@@ -460,7 +460,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Expensive test - requires model download and embedding generation
     async fn test_search_and_add() {
         let (store, _temp_dir) = create_test_store().await;
 
@@ -487,7 +486,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Expensive test - requires model download and embedding generation
     async fn test_add_with_metadata() {
         let (store, _temp_dir) = create_test_store().await;
 
