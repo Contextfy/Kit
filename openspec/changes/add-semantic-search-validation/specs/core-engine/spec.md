@@ -33,7 +33,8 @@ The evaluation framework SHALL:
 #### Scenario: Evaluation framework runs successfully
 
 - **WHEN** the evaluation test is executed (`cargo test --test semantic_evaluation`)
-- **THEN** the test completes within 60 seconds
+- **THEN** the test completes within 60 seconds on warm-cache runs (model already downloaded)
+- **AND** on cold-start runs (first execution), the test may take 1-5 minutes for BGE-small-en model download
 - **AND** all test queries are executed against both BM25 and Hybrid search engines
 - **AND** evaluation metrics are calculated correctly
 - **AND** a Markdown report is generated at `docs/SEMANTIC_EVALUATION_REPORT.md`

@@ -299,30 +299,15 @@ impl VectorStoreTrait for LanceDbStore {
                 Some(e),
             )))?;
 
-        // Step 4: Create Arrow record batch using direct array creation
-        // Schema: id, title, summary, content, vector, keywords, source_path
+        // Step 4: Create Arrow record batch using shared schema
+        // Use the canonical schema from schema.rs to ensure alignment with table.add()
+        use crate::slices::vector::schema::{knowledge_record_schema, VECTOR_DIM};
         use arrow::array::{FixedSizeListArray, Float32Array};
-        use arrow::datatypes::{Field, Schema};
 
-        // Create schema
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", arrow::datatypes::DataType::Utf8, false),
-            Field::new("title", arrow::datatypes::DataType::Utf8, false),
-            Field::new("summary", arrow::datatypes::DataType::Utf8, false),
-            Field::new("content", arrow::datatypes::DataType::Utf8, false),
-            Field::new(
-                "vector",
-                arrow::datatypes::DataType::FixedSizeList(
-                    Arc::new(Field::new("item", arrow::datatypes::DataType::Float32, false)),
-                    384,
-                ),
-                false,
-            ),
-            Field::new("keywords", arrow::datatypes::DataType::Utf8, true),
-            Field::new("source_path", arrow::datatypes::DataType::Utf8, false),
-        ]));
+        // Import the canonical schema
+        let schema = Arc::new(knowledge_record_schema());
 
-        // Create arrays directly
+        // Create arrays directly (must match schema field order)
         let id_array = StringArray::from(vec![id]);
         let title_array = StringArray::from(vec![title.as_str()]);
         let summary_array = StringArray::from(vec![summary.as_str()]);
@@ -330,14 +315,14 @@ impl VectorStoreTrait for LanceDbStore {
         let keywords_array = StringArray::from(vec![keywords]);
         let source_path_array = StringArray::from(vec!["unknown"]);
 
-        // Create FixedSizeListArray for vector
+        // Create FixedSizeListArray for vector (use VECTOR_DIM constant)
         let vector_values = Float32Array::from(embedding.clone());
         // The field should describe the item inside the list (Float32), not the list itself
         // FixedSizeListArray::new() will wrap it in FixedSizeList automatically
-        let vector_item_field = Field::new("item", arrow::datatypes::DataType::Float32, false);
+        let vector_item_field = arrow::datatypes::Field::new("item", arrow::datatypes::DataType::Float32, false);
         let vector_array = FixedSizeListArray::new(
             Arc::new(vector_item_field),
-            384,
+            VECTOR_DIM, // Use constant instead of hardcoded 384
             Arc::new(vector_values),
             None, // null bitmap (None means all values are valid)
         );
@@ -459,8 +444,8 @@ mod tests {
             .await
             .expect("Failed to create table");
 
-        // Create embedding model (downloads BGE-small-en on first run, ~100-400MB)
-        let embedding_model = Arc::new(EmbeddingModel::new().expect("Failed to create embedding model"));
+        // Use test stub to avoid expensive model download in unit tests
+        let embedding_model = Arc::new(EmbeddingModel::test_stub());
 
         let store = LanceDbStore::new(conn, table_name, embedding_model);
 
@@ -543,8 +528,8 @@ mod tests {
 
         let conn = connect(db_uri).await.expect("Failed to connect");
 
-        // Create embedding model for the store
-        let embedding_model = Arc::new(EmbeddingModel::new().expect("Failed to create embedding model"));
+        // Use test stub to avoid expensive model download
+        let embedding_model = Arc::new(EmbeddingModel::test_stub());
 
         // Create store with non-existent table
         let store = LanceDbStore::new(conn, "nonexistent_table", embedding_model);

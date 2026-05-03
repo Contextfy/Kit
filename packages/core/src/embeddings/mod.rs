@@ -105,6 +105,41 @@ impl EmbeddingModel {
         })
     }
 
+    /// Creates a lightweight test stub that doesn't load the real BGE model.
+    ///
+    /// This is intended for unit tests where:
+    /// - Real embedding semantics aren't important
+    /// - Fast test execution is critical
+    /// - Network access or model downloads should be avoided
+    ///
+    /// # Important
+    ///
+    /// **TESTING ONLY**. Never use this in production code.
+    /// The stub generates deterministic vectors based on text hash, not real embeddings.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// #[cfg(test)]
+    /// use contextfy_core::embeddings::EmbeddingModel;
+    ///
+    /// #[test]
+    /// fn test_with_stub() {
+    ///     let model = EmbeddingModel::test_stub();
+    ///     let vector = model.embed_text("test").unwrap();
+    ///     assert_eq!(vector.len(), 384);
+    /// }
+    /// ```
+    #[cfg(test)]
+    pub fn test_stub() -> Self {
+        // For testing, we use a fake TextEmbedding that generates deterministic vectors
+        // This avoids the expensive model download and initialization
+        let fake_inner = FakeTextEmbedding::new();
+        Self {
+            inner: Mutex::new(fake_inner),
+        }
+    }
+
     /// Generates a 384-dimensional embedding vector for the given text.
     ///
     /// # Arguments
@@ -266,6 +301,40 @@ impl EmbeddingModel {
 
 // Note: EmbeddingModel is Send + Sync because Mutex<T> is Send + Sync when T is Send.
 // No unsafe impl needed - Mutex provides the necessary guarantees.
+
+/// Fake TextEmbedding implementation for lightweight testing.
+///
+/// This type mimics fastembed::TextEmbedding but generates deterministic vectors
+/// based on text hash instead of running actual ONNX inference.
+#[cfg(test)]
+struct FakeTextEmbedding;
+
+#[cfg(test)]
+impl FakeTextEmbedding {
+    fn new() -> Self {
+        Self
+    }
+
+    /// Mimics fastembed's embed() method but returns deterministic fake vectors
+    fn embed(&self, texts: Vec<&str>, _options: Option<fastembed::EmbeddingOptions>) -> anyhow::Result<Vec<Vec<f32>>> {
+        texts
+            .iter()
+            .map(|&text| {
+                let mut vector = Vec::with_capacity(384);
+                let mut hash: u64 = 5381;
+                for byte in text.bytes() {
+                    hash = hash.wrapping_mul(33).wrapping_add(byte as u64);
+                }
+                for i in 0..384 {
+                    let mixed_hash = hash.wrapping_mul(i as u64).wrapping_add(i as u64);
+                    let value = (mixed_hash % 1000) as f32 / 1000.0;
+                    vector.push(value);
+                }
+                Ok(vector)
+            })
+            .collect()
+    }
+}
 
 /// Fake embedding backend for testing purposes.
 ///
