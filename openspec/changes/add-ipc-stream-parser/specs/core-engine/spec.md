@@ -65,6 +65,7 @@ The core engine SHALL define an `AstChunk` structure that represents a parsed co
 #### Scenario: 反序列化有效的 JSONL 为 AstChunk
 
 - **当**系统接收到符合以下格式的 JSON 行时：
+
   ```json
   {
     "file_path": "/path/to/file.py",
