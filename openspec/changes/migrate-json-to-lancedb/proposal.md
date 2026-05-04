@@ -84,6 +84,7 @@ enum MigrateResult {
 ### 4. CLI 入口设计
 
 **方案 A（推荐）**：隐藏的 CLI 子命令
+
 ```rust
 // packages/cli/src/commands/migrate.rs
 pub async fn run_migrate_command(args: MigrateArgs) -> Result<()> {
@@ -128,7 +129,9 @@ pub async fn validate_migration(
   - `packages/core/src/migration/**` (新建模块)
   - `packages/core/src/embeddings/mod.rs` (添加 batch embedding 方法)
   - `packages/cli/src/commands/migrate.rs` (新增 CLI 命令)
-  - `packages/core/Cargo.toml` (添加 `indicatif` 进度条依赖)
+  - `packages/core/Cargo.toml` (添加 `dirs = "5"` 用于路径展开)
+  - `packages/cli/Cargo.toml` (添加 `dirs = "5"` 用于路径展开)
+- **进度展示**: 使用原生 `println!` 而非 `indicatif` 进度条库
 - **BREAKING**: None（纯新增功能，不修改现有 API）
 
 ## Migration Strategy

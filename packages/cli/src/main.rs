@@ -24,7 +24,7 @@ enum Commands {
     Serve,
     /// Migrate JSON data to LanceDB
     Migrate {
-        /// Path to JSON file to migrate
+        /// Path to JSON file or directory of JSON files to migrate
         #[arg(short, long)]
         json: Option<std::path::PathBuf>,
         /// LanceDB connection URI

@@ -150,11 +150,19 @@ pub async fn migrate_json_to_lancedb(
     config: MigrationConfig,
 ) -> Result<MigrationStats, MigrationError> {
     use crate::embeddings::EmbeddingModel;
-    use crate::migration::transformer::{LancedbKnowledgeRecord, RecordTransformer};
+    use crate::migration::transformer::RecordTransformer;
     use json_reader::JsonReader;
 
     // Step 1: Backup JSON file (if requested)
     if config.backup {
+        // Check if path is a directory (not supported for automatic backup)
+        if config.json_path.is_dir() {
+            return Err(MigrationError::BackupError {
+                path: config.json_path.clone(),
+                reason: "Automatic backup is not supported for directories. \
+                          Please use --no-backup or specify a single JSON file.".to_string(),
+            });
+        }
         backup_json_file(&config.json_path)?;
     }
 
@@ -175,10 +183,15 @@ pub async fn migrate_json_to_lancedb(
     // Step 4: Create table if not exists
     create_table_if_not_exists(&conn, &config.table_name).await?;
 
-    // Step 5: Open the table for insertion
-    let _table = conn
+    // Step 5: Get initial row count (for incremental validation)
+    let table = conn
         .open_table(&config.table_name)
         .execute()
+        .await
+        .map_err(MigrationError::LanceDbError)?;
+
+    let initial_row_count = table
+        .count_rows(None)
         .await
         .map_err(MigrationError::LanceDbError)?;
 
@@ -238,25 +251,13 @@ pub async fn migrate_json_to_lancedb(
             })?;
 
         // Transform to LanceDB intermediate format
-        let lancedb_records: Vec<LancedbKnowledgeRecord> = valid_records
-            .iter()
-            .zip(embeddings.into_iter())
-            .map(|(record, embedding)| {
-                Ok(LancedbKnowledgeRecord {
-                    id: record.id.clone(),
-                    title: record.title.clone(),
-                    summary: record.summary.clone(),
-                    content: record.content.clone(),
-                    vector: embedding,
-                    keywords: if record.keywords.is_empty() {
-                        None
-                    } else {
-                        Some(record.keywords.join(","))
-                    },
-                    source_path: record.source_path.clone(),
-                })
-            })
-            .collect::<Result<Vec<_>, MigrationError>>()?;
+        // Use transform_batch to ensure count validation (no silent truncation via zip)
+        let lancedb_records = transformer
+            .transform_batch(&valid_records, embeddings)
+            .map_err(|e| MigrationError::BatchError {
+                batch_number,
+                reason: e.to_string(),
+            })?;
 
         // Convert to Arrow RecordBatch
         let record_batch = transformer.to_record_batch(&lancedb_records).map_err(|e| {
@@ -274,7 +275,7 @@ pub async fn migrate_json_to_lancedb(
         let reader: Box<dyn RecordBatchReader + Send> = Box::new(
             arrow::array::RecordBatchIterator::new(vec![Ok(record_batch)].into_iter(), schema),
         );
-        _table
+        table
             .add(reader)
             .execute()
             .await
@@ -293,8 +294,8 @@ pub async fn migrate_json_to_lancedb(
     // Step 8: Create vector index
     create_vector_index(&conn, &config.table_name).await?;
 
-    // Step 9: Validate migration
-    validate_migration(&conn, &config.table_name, stats.successful).await?;
+    // Step 9: Validate migration (supports incremental runs)
+    validate_migration(&conn, &config.table_name, initial_row_count, stats.successful).await?;
 
     Ok(stats)
 }
@@ -420,10 +421,14 @@ async fn create_vector_index(
 }
 
 /// Validate migration results
+///
+/// Supports incremental validation by checking if the actual row count equals
+/// the initial count plus the number of newly inserted rows.
 async fn validate_migration(
     conn: &lancedb::connection::Connection,
     table_name: &str,
-    expected_count: usize,
+    initial_row_count: usize,
+    expected_inserted_rows: usize,
 ) -> Result<(), MigrationError> {
     let table = conn
         .open_table(table_name)
@@ -437,16 +442,24 @@ async fn validate_migration(
         .await
         .map_err(MigrationError::LanceDbError)?;
 
-    println!("Validating migration: expected {} records, found {}", expected_count, actual_count);
+    let expected_total = initial_row_count + expected_inserted_rows;
 
-    if actual_count != expected_count {
+    println!(
+        "Validating migration: initial rows={}, inserted={}, total expected={}, actual={}",
+        initial_row_count, expected_inserted_rows, expected_total, actual_count
+    );
+
+    if actual_count != expected_total {
         return Err(MigrationError::ValidationError(format!(
-            "Migration validation failed: expected {} records in table '{}', but found {}",
-            expected_count, table_name, actual_count
+            "Migration validation failed: table '{}' expected {} total rows (initial {} + inserted {}), but found {}",
+            table_name, expected_total, initial_row_count, expected_inserted_rows, actual_count
         )));
     }
 
-    println!("✓ Migration validation passed: {} records verified", actual_count);
+    println!(
+        "✓ Migration validation passed: {} total rows verified ({} existing + {} new)",
+        actual_count, initial_row_count, expected_inserted_rows
+    );
 
     Ok(())
 }
@@ -512,6 +525,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Expensive test - requires model download"]
     async fn test_migration_small_dataset() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_dir = temp_dir.path().join("lancedb");
@@ -543,6 +557,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Expensive test - requires model download"]
     async fn test_migration_with_invalid_records_skip_errors() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_dir = temp_dir.path().join("lancedb");
@@ -602,6 +617,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Expensive test - requires model download"]
     async fn test_migration_empty_dataset() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let db_dir = temp_dir.path().join("lancedb");
