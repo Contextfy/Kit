@@ -63,16 +63,93 @@ graph TD
 
 无依赖的纯 Rust 库，负责业务逻辑。
 
-- **`compiler` 模块:**
-- **MarkdownParser:** 基于 `pulldown-cmark`，负责 AST 解析。
-- **Chunker:** 实现语义切片策略（按 Header、按代码块）。
-- **Summarizer:** 提取用于 Scout 阶段的摘要（首段截取或 LLM 总结接口）。
-- **`storage` 模块:**
-- **LanceManager:** 封装 LanceDB 的读写操作。
-- **PackManager:** 管理 Context Pack 的生命周期（加载、卸载、版本检查）。
-- **`retriever` 模块:**
-- **HybridSearcher:** 协调 Vector Search (LanceDB) 和 Keyword Search (BM25/Tantivy)。
-- **ReRanker:** 根据元数据权重对结果进行重排序。
+#### 三层存储架构 (Three-Tier Storage Architecture)
+
+```
+┌─────────────────────────────────────────────┐
+│         Facade Layer (SearchEngine)          │
+│  - search(query_text, limit)                │
+│  - add(id, title, summary, content, keywords)│
+│  - get_document(id)                         │
+└──────────────────┬──────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────┐
+│      Orchestrator Layer (HybridOrchestrator) │
+│  - 并行执行 BM25 + 向量搜索                 │
+│  - RRF (Reciprocal Rank Fusion) 结果合并    │
+│  - 优雅的错误降级                           │
+└────────┬──────────────────────┬─────────────┘
+         │                      │
+    ▼    │                      ▼
+┌──────────────┐        ┌──────────────┐
+│ LanceDbStore │        │TantivyBm25Store│
+│  (向量搜索)  │        │  (BM25搜索)   │
+└──────────────┘        └──────────────┘
+```
+
+##### Facade Layer: SearchEngine
+
+对外提供的极简高级接口，隐藏内部复杂性。
+
+**核心 API:**
+- `search(query_text, limit)` → 返回混合检索结果
+- `add(id, title, summary, content, keywords)` → 添加文档到两个存储
+- `get_document(id)` → 获取单个文档详情
+- `get_documents(ids)` → 批量获取文档
+- `delete(id)` → 删除文档（返回详细结果）
+
+**特点:**
+- 单例 EmbeddingModel 管理（共享 BGE-small-en 模型）
+- 自动初始化 LanceDB 和 Tantivy 后端
+- 完全向后兼容的 API 设计
+
+##### Orchestrator Layer: HybridOrchestrator
+
+混合检索编排器，协调多个存储后端。
+
+**核心特性:**
+- **并行执行**: 使用 `tokio::join!` 同时执行 BM25 和向量搜索
+- **RRF 融合**: 使用倒数排名融合算法（k=60）合并结果
+- **错误降级**: 单个后端失败时自动降级到另一个
+
+**RRF 算法:**
+```text
+score(d) = Σ 1 / (k + rank_i(d))
+
+其中：
+- d 是文档
+- rank_i(d) 是文档在方法 i 中的排名（1-indexed）
+- k 是常数（默认 60）
+```
+
+##### Storage Layer: 双存储后端
+
+**LanceDbStore (向量存储)**
+- 使用 LanceDB 存储向量嵌入（384 维，BGE-small-en）
+- 支持语义相似度搜索（L2 距离）
+- Schema: `{id, title, summary, content, vector, keywords, source_path}`
+
+**TantivyBm25Store (全文存储)**
+- 使用 Tantivy 索引实现 BM25 全文搜索
+- 支持中文分词（Jieba）
+- 关键词字段权重提升（5.0-10.0）
+- 返回完整文档详情（title, summary, content）
+
+#### 核心模块
+
+- **`parser` 模块:**
+  - **MarkdownParser:** 基于 `pulldown-cmark`，负责 AST 解析。
+  - **SemanticChunker:** 实现语义切片策略（按 H2 Header）。
+  - **SummaryExtractor:** 提取文档摘要（首段或代码块）。
+
+- **`embeddings` 模块:**
+  - **EmbeddingModel:** 封装 FastEmbed，生成 384 维向量。
+  - **单例模式:** 全局共享模型实例，避免重复加载。
+
+- **`bridge` 模块:**
+  - **BridgeApi:** 提供 FFI 安全接口（Node.js/Python）。
+  - **错误映射:** 将 Rust 错误转换为跨语言兼容格式。
 
 ### 3.2 `packages/bridge` (The Glue)
 
@@ -114,31 +191,47 @@ sequenceDiagram
 
 ```
 
-### 4.2 两阶段检索 (Two-Stage Retrieval)
+### 4.2 混合检索流程 (Hybrid Retrieval Flow)
 
-这是解决 Token 浪费和提升准确率的核心路径。
+系统原生使用混合检索架构，无需手动切换模式。这是解决 Token 浪费和提升准确率的核心路径。
 
 ```mermaid
 sequenceDiagram
-    participant Agent as AI Agent
-    participant Bridge as API Layer
-    participant Scout as Core::Scout
-    participant Inspect as Core::Inspect
+    participant Client as CLI/Server
+    participant SearchEngine as SearchEngine (Facade)
+    participant Orchestrator as HybridOrchestrator
+    participant Vector as LanceDbStore
+    participant BM25 as TantivyBm25Store
 
-    Note over Agent, Scout: Stage 1: 侦察 (Scout)
-    Agent->>Bridge: scout("如何创建自定义剑?")
-    Bridge->>Scout: Query: "create custom sword"
-    Scout->>Scout: Hybrid Search (Vector + BM25)
-    Scout-->>Agent: 返回 [Brief {id: "1", title: "Item API", summary: "..."}]
+    Note over Client, Orchestrator: 阶段 1: 混合搜索
+    Client->>SearchEngine: search("如何创建自定义剑?", 10)
+    SearchEngine->>Orchestrator: search(Query)
 
-    Note over Agent, Inspect: Stage 2: 检视 (Inspect)
-    Agent->>Agent: 思考: "ID 1 看起来最相关"
-    Agent->>Bridge: inspect(["1"])
-    Bridge->>Inspect: fetch_content("1")
-    Inspect->>Inspect: Context Pruning (高亮关键段落)
-    Inspect-->>Agent: 返回完整 Markdown 代码片段
+    par 并行执行两个搜索
+        Orchestrator->>Vector: search(Query)
+        Vector-->>Orchestrator: Vec<Hit> (向量相似度)
+    and
+        Orchestrator->>BM25: search(Query)
+        BM25-->>Orchestrator: Vec<Bm25Result> (BM25分数)
+    end
 
+    Orchestrator->>Orchestrator: RRF融合 (k=60)
+    Orchestrator-->>SearchEngine: Vec<Hit> (合并结果)
+    SearchEngine-->>Client: Vec<Hit> (排序结果)
+
+    Note over Client, BM25: 阶段 2: 获取详情
+    Client->>SearchEngine: get_documents(["doc-id-1", "doc-id-2"])
+    SearchEngine->>BM25: get_by_ids(["doc-id-1", "doc-id-2"])
+    BM25-->>SearchEngine: Vec<Option<DocumentDetails>>
+    SearchEngine-->>Client: 完整文档内容
 ```
+
+**关键特性:**
+
+1. **并行搜索**: BM25 和向量搜索同时执行，延迟 ≈ `max(BM25延迟, 向量延迟)`
+2. **RRF 融合**: 无需分数归一化，直接基于排名融合
+3. **优雅降级**: 单个后端失败时自动使用另一个
+4. **批量获取**: `get_documents()` 支持批量获取，减少网络往返
 
 ---
 
@@ -146,18 +239,30 @@ sequenceDiagram
 
 ### 5.1 物理存储结构 (On-Disk Structure)
 
-每个 Context Pack 是一个独立的文件夹，实现了物理隔离。
+系统使用双存储架构：LanceDB (向量) + Tantivy (全文)。
 
 ```
-~/.contextfy/packs/
-├── fabric-1.21/              # Namespace: fabric-1.21
-│   ├── manifest.json         # 元数据 (Version, Source Config)
-│   ├── .lock                 # 写入锁
-│   ├── index/                # LanceDB 数据目录
-│   │   ├── data.lance/       # 向量与正文数据
-│   │   └── _transactions/    # MVCC 事务日志
-│   └── cache/                # 增量编译的 Hash 缓存
-└── std-lib/                  # Namespace: std-lib
-    └── ...
+.contextfy/
+├── data/
+│   ├── lancedb/              # LanceDB 向量数据库
+│   │   ├── knowledge.lance/  # 向量与正文数据 (Arrow格式)
+│   │   └── _transactions/    # LanceDB MVCC 事务日志
+│   └── bm25_index/           # Tantivy 全文索引
+│       ├── meta.json         # 索引元数据
+│       ├── .manageable/      # 可变段 (增量索引)
+│       └── immutable/        # 不可变段 (已合并段)
+└── cache.json                # 旧数据备份 (迁移后可删除)
 ```
+
+**存储特性对比:**
+
+| 特性 | LanceDB (向量) | Tantivy (BM25) |
+|------|----------------|----------------|
+| **用途** | 语义相似度搜索 | 关键词全文搜索 |
+| **数据格式** | Arrow (列式) | 自有倒排索引 |
+| **向量维度** | 384 (BGE-small-en) | N/A |
+| **支持语言** | 跨语言 | Rust 原生 |
+| **索引大小** | 较大 (~1KB/doc) | 较小 (~0.5KB/doc) |
+| **查询延迟** | ~50-100ms | ~10-50ms |
+| **并发模型** | MVCC | 读锁/写锁 |
 
