@@ -132,19 +132,19 @@ impl RecordTransformer {
         // Flatten all vectors into a single Float32Array
         let vector_dim = 384;
         let mut vector_values = Vec::with_capacity(num_rows * vector_dim);
-        for record in records {
-            vector_values.extend_from_slice(&record.vector);
-        }
 
-        // Validate all vectors have correct dimension
-        if vector_values.len() != num_rows * vector_dim {
-            return Err(MigrationError::ValidationError(format!(
-                "Vector dimension mismatch: expected {} values ({} records * {} dims), got {}",
-                num_rows * vector_dim,
-                num_rows,
-                vector_dim,
-                vector_values.len()
-            )));
+        // Validate each vector dimension BEFORE extending to prevent data corruption
+        for (index, record) in records.iter().enumerate() {
+            if record.vector.len() != vector_dim {
+                return Err(MigrationError::ValidationError(format!(
+                    "Vector dimension mismatch at record index {}: expected {} dims, got {} (record id: {})",
+                    index,
+                    vector_dim,
+                    record.vector.len(),
+                    record.id
+                )));
+            }
+            vector_values.extend_from_slice(&record.vector);
         }
 
         let vector_array = Float32Array::from(vector_values);

@@ -49,13 +49,15 @@ pub async fn migrate(
     println!("📂 JSON file: {}", json_path.display());
     println!("🗄️  LanceDB URI: {}", lancedb_uri);
 
+    // Use default values as fallback
+    let defaults = MigrationConfig::default();
     let config = MigrationConfig {
         json_path,
         lancedb_uri,
-        table_name: table_name.unwrap_or_else(|| "knowledge".to_string()),
-        batch_size: batch_size.unwrap_or(100),
-        skip_errors: skip_errors.unwrap_or(false),
-        backup: backup.unwrap_or(true),
+        table_name: table_name.unwrap_or(defaults.table_name),
+        batch_size: batch_size.unwrap_or(defaults.batch_size),
+        skip_errors: skip_errors.unwrap_or(defaults.skip_errors),
+        backup: backup.unwrap_or(defaults.backup),
     };
 
     println!("⚙️  Configuration:");

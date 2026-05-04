@@ -70,12 +70,11 @@ async fn main() -> anyhow::Result<()> {
             skip_errors,
             no_backup,
         } => {
-            let json_path = json.unwrap_or_else(|| {
-                std::path::PathBuf::from("~/.contextfy/cache.json")
-            });
-            let db_uri = lancedb_uri.unwrap_or_else(|| {
-                "lancedb://~/.contextfy/db".to_string()
-            });
+            // Use MigrationConfig defaults which properly expand home directory
+            let defaults = contextfy_core::migration::MigrationConfig::default();
+
+            let json_path = json.unwrap_or_else(|| defaults.json_path);
+            let db_uri = lancedb_uri.unwrap_or_else(|| defaults.lancedb_uri);
 
             migrate(
                 json_path,

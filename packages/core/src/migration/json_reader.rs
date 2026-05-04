@@ -97,38 +97,102 @@ pub struct JsonReader {
 
 impl JsonReader {
     /// Create a new JSON reader from a file path
+    ///
+    /// Supports both:
+    /// - Single JSON files
+    /// - Directories containing multiple JSON files (will be merged)
     pub async fn from_path<P: AsRef<Path>>(
         path: P,
         batch_size: usize,
     ) -> Result<Self, MigrationError> {
+        if batch_size == 0 {
+            return Err(MigrationError::ValidationError(
+                "batch_size must be greater than 0".to_string(),
+            ));
+        }
+
         let path = path.as_ref();
 
-        // Read the file
-        let content =
-            tokio::fs::read_to_string(path)
+        // Check if path is a directory
+        if path.is_dir() {
+            // Read all .json files in the directory and merge them
+            let mut all_records = Vec::new();
+            let mut entries = tokio::fs::read_dir(path)
                 .await
                 .map_err(|e| MigrationError::JsonReadError {
                     path: path.to_path_buf(),
                     source: Box::new(e),
                 })?;
 
-        // Parse JSON
-        let data: JsonData = serde_json::from_str(&content)?;
+            while let Some(entry) = entries.next_entry().await.map_err(|e| {
+                MigrationError::JsonReadError {
+                    path: path.to_path_buf(),
+                    source: Box::new(e),
+                }
+            })? {
+                let entry_path = entry.path();
+                if entry_path.extension().and_then(|s| s.to_str()) == Some("json") {
+                    // Read and parse this JSON file
+                    let content = tokio::fs::read_to_string(&entry_path)
+                        .await
+                        .map_err(|e| MigrationError::JsonReadError {
+                            path: entry_path.clone(),
+                            source: Box::new(e),
+                        })?;
+
+                    let data: JsonData = serde_json::from_str(&content).map_err(|e| {
+                        MigrationError::JsonReadError {
+                            path: entry_path.clone(),
+                            source: Box::new(e),
+                        }
+                    })?;
+
+                    all_records.extend(data.records);
+                }
+            }
+
+            Ok(Self {
+                data: JsonData {
+                    version: "1.0".to_string(),
+                    records: all_records,
+                },
+                batch_size,
+                current_position: 0,
+            })
+        } else {
+            // Read the file
+            let content =
+                tokio::fs::read_to_string(path)
+                    .await
+                    .map_err(|e| MigrationError::JsonReadError {
+                        path: path.to_path_buf(),
+                        source: Box::new(e),
+                    })?;
+
+            // Parse JSON
+            let data: JsonData = serde_json::from_str(&content)?;
+
+            Ok(Self {
+                data,
+                batch_size,
+                current_position: 0,
+            })
+        }
+    }
+
+    /// Create a reader from pre-parsed JSON data
+    pub fn from_data(data: JsonData, batch_size: usize) -> Result<Self, MigrationError> {
+        if batch_size == 0 {
+            return Err(MigrationError::ValidationError(
+                "batch_size must be greater than 0".to_string(),
+            ));
+        }
 
         Ok(Self {
             data,
             batch_size,
             current_position: 0,
         })
-    }
-
-    /// Create a reader from pre-parsed JSON data
-    pub fn from_data(data: JsonData, batch_size: usize) -> Self {
-        Self {
-            data,
-            batch_size,
-            current_position: 0,
-        }
     }
 
     /// Get total number of records
@@ -227,7 +291,7 @@ mod tests {
             records,
         };
 
-        let mut reader = JsonReader::from_data(data, 100);
+        let mut reader = JsonReader::from_data(data, 100).expect("Failed to create reader");
 
         assert_eq!(reader.total_records(), 250);
         assert!(reader.has_more_batches());

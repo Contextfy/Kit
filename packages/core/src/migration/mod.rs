@@ -82,9 +82,12 @@ pub struct MigrationConfig {
 
 impl Default for MigrationConfig {
     fn default() -> Self {
+        // Expand home directory for default paths
+        let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
+
         Self {
-            json_path: PathBuf::from("~/.contextfy/cache.json"),
-            lancedb_uri: "lancedb://~/.contextfy/db".to_string(),
+            json_path: home_dir.join(".contextfy/cache.json"),
+            lancedb_uri: format!("lancedb://{}", home_dir.join(".contextfy/db").display()),
             table_name: "knowledge".to_string(),
             batch_size: 100,
             skip_errors: false,
@@ -204,24 +207,23 @@ pub async fn migrate_json_to_lancedb(
         stats.total_processed += batch_size;
 
         // Validate records in this batch
-        let valid_records: Vec<json_reader::JsonRecord> = batch
-            .into_iter()
-            .filter_map(|record| match record.validate() {
-                Ok(()) => Some(record),
+        let mut valid_records = Vec::with_capacity(batch.len());
+        for record in batch {
+            match record.validate() {
+                Ok(()) => {
+                    valid_records.push(record);
+                }
                 Err(e) => {
                     if config.skip_errors {
                         eprintln!("Skipping invalid record: {}", e);
                         stats.skipped += 1;
-                        None
                     } else {
-                        // Return the error if we're not skipping
-                        // Since filter_map can't return errors, we'll just skip it here
-                        // and let it fail during embedding generation
-                        Some(record)
+                        // Fail immediately if not skipping errors
+                        return Err(e);
                     }
                 }
-            })
-            .collect();
+            }
+        }
 
         if valid_records.is_empty() {
             continue;
@@ -423,15 +425,28 @@ async fn validate_migration(
     table_name: &str,
     expected_count: usize,
 ) -> Result<(), MigrationError> {
-    let _table = conn
+    let table = conn
         .open_table(table_name)
         .execute()
         .await
         .map_err(MigrationError::LanceDbError)?;
 
-    // Count records in table
-    // TODO: Implement proper counting via LanceDB API
-    println!("Validating migration: expected {} records", expected_count);
+    // Count actual records in table
+    let actual_count = table
+        .count_rows(None)
+        .await
+        .map_err(MigrationError::LanceDbError)?;
+
+    println!("Validating migration: expected {} records, found {}", expected_count, actual_count);
+
+    if actual_count != expected_count {
+        return Err(MigrationError::ValidationError(format!(
+            "Migration validation failed: expected {} records in table '{}', but found {}",
+            expected_count, table_name, actual_count
+        )));
+    }
+
+    println!("✓ Migration validation passed: {} records verified", actual_count);
 
     Ok(())
 }

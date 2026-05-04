@@ -157,10 +157,11 @@ pub async fn validate_migration(
 - **LanceDB 插入**：~50ms/batch（100 条记录）
 - **总吞吐量**：约 400-600 记录/秒（取决于硬件）
 
-**优化点**：
-- 使用 `tokio::spawn` 并行处理多个 batch（限制并发数为 4）
-- 流式读取 JSON，避免一次性加载大文件到内存
-- 使用 `indicatif` 显示进度条和 ETA
+**实现策略**：
+- **串行批处理**：使用单线串行批处理，避免与 FastEmbed 的 ONNX Runtime 线程池竞争
+- **流式读取**：优化 JSON 流式读取，避免一次性加载大文件到内存
+- **进度显示**：使用简单的 println! 显示批次处理进度
+- **注意**：不使用 `tokio::spawn` 并发，不使用 `indicatif` 进度条（保持轻量级）
 
 ## Testing Strategy
 
