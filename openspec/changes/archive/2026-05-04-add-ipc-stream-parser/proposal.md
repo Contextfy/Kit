@@ -24,6 +24,7 @@
 ### 2. 数据结构定义
 
 在 `packages/core/src/kernel/types.rs` 中新增：
+
 ```rust
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AstChunk {

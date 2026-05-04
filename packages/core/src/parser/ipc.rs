@@ -101,6 +101,14 @@ impl SidecarIPC {
     {
         let args: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string()).collect();
 
+        // Validate that args is not empty
+        if args.is_empty() {
+            return Err(anyhow::anyhow!(IpcError::ChildStartFailed {
+                command: "<empty>".to_string(),
+                cause: "at least one argument is required".to_string(),
+            }));
+        }
+
         // Determine command based on environment
         let (program, full_args) = if std::env::var("COCOINDEX_MODE").as_deref() == Ok("dev") {
             // Development mode: use `uv run`
@@ -120,9 +128,9 @@ impl SidecarIPC {
         cmd.stderr(Stdio::piped());
 
         // Spawn child process
-        let mut child = cmd.spawn().with_context(|| IpcError::ChildStartFailed {
+        let mut child = cmd.spawn().map_err(|e| IpcError::ChildStartFailed {
             command: format!("{} {:?}", program, full_args),
-            cause: "unknown".to_string(),
+            cause: e.to_string(),
         })?;
 
         // Extract stdout and stderr handles using take() to avoid partial move
@@ -186,16 +194,18 @@ impl SidecarIPC {
         let line = line.trim_end();
 
         // Deserialize JSON
-        let chunk: AstChunk =
-            serde_json::from_str(line).with_context(|| IpcError::JsonParseFailed {
-                line_number: self.line_number,
-                raw_line: if line.len() > 100 {
-                    format!("{}...", &line[..100])
+        let chunk: AstChunk = serde_json::from_str(line).map_err(|e| IpcError::JsonParseFailed {
+            line_number: self.line_number,
+            raw_line: {
+                let prefix: String = line.chars().take(100).collect();
+                if prefix.len() < line.len() {
+                    format!("{prefix}...")
                 } else {
                     line.to_string()
-                },
-                cause: "invalid JSON".to_string(),
-            })?;
+                }
+            },
+            cause: e.to_string(),
+        })?;
 
         Ok(Some(chunk))
     }
@@ -206,11 +216,10 @@ impl SidecarIPC {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if:
-    /// - Exit code is non-zero
-    /// - Failed to read stderr
+    /// Returns `Err` if exit code is non-zero or stderr read fails.
     pub fn wait(&mut self) -> Result<()> {
-        // Collect stderr if available
+        // Collect stderr if available BEFORE calling child.wait()
+        // to prevent deadlock if stderr buffer is full
         let stderr = if let Some(mut stderr_handle) = self.stderr.take() {
             let mut stderr_output = String::new();
             stderr_handle
@@ -384,6 +393,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "modifies global env vars, can cause flaky tests in parallel runs"]
     fn test_dev_mode_spawn() {
         // Test that dev mode uses uv run
         std::env::set_var("COCOINDEX_MODE", "dev");

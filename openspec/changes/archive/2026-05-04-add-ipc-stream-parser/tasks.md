@@ -93,7 +93,8 @@
 ## 实现总结
 
 **已完成的代码变更**：
-```
+
+```text
 packages/core/src/
 ├── kernel/
 │   ├── mod.rs          (+1 line, 导出 AstChunk)
