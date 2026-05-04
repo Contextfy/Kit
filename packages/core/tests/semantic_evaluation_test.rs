@@ -1258,6 +1258,7 @@ async fn run_evaluation(queries: &[TestQuery], engine: &SearchEngine) -> Vec<Eva
             .await
             .unwrap_or_else(|e| panic!("BM25 search failed for query '{}': {}", query.text, e));
         let bm25_ranking: Vec<String> = bm25_results
+            .unwrap_or_default()
             .iter()
             .map(|r| r.id.clone())
             .collect();
