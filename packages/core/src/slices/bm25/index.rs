@@ -112,7 +112,7 @@ pub(crate) fn create_index_reader(index: &Index) -> Result<tantivy::IndexReader>
 
 #[cfg(test)]
 mod tests {
-    use super::super::schema::FIELD_TITLE;
+    use super::super::schema::FIELD_SYMBOL_NAME;
     use super::*;
     use tempfile::TempDir;
 
@@ -124,7 +124,7 @@ mod tests {
         let index = index.unwrap();
         // Verify index can be used
         let schema = index.schema();
-        assert!(schema.get_field(FIELD_TITLE).is_ok());
+        assert!(schema.get_field(FIELD_SYMBOL_NAME).is_ok());
     }
 
     #[test]
@@ -138,7 +138,7 @@ mod tests {
         let index = index.unwrap();
         // Verify index can be used
         let schema = index.schema();
-        assert!(schema.get_field(FIELD_TITLE).is_ok());
+        assert!(schema.get_field(FIELD_SYMBOL_NAME).is_ok());
 
         // Verify index files were created (check for Tantivy's core metadata file)
         assert!(
@@ -162,7 +162,7 @@ mod tests {
 
         let index2 = index2.unwrap();
         // Verify schema consistency
-        assert!(index2.schema().get_field(FIELD_TITLE).is_ok());
+        assert!(index2.schema().get_field(FIELD_SYMBOL_NAME).is_ok());
     }
 
     #[test]

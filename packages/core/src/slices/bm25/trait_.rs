@@ -8,7 +8,7 @@
 use async_trait::async_trait;
 
 use crate::kernel::errors::AppError;
-use crate::kernel::types::{Hit, Query, Score};
+use crate::kernel::types::{AstChunk, Hit, Query, Score};
 
 /// BM25 search result with document metadata
 ///
@@ -188,6 +188,24 @@ pub trait Bm25StoreTrait: Send + Sync {
         let futures = ids.iter().map(|id| self.get_by_id(id));
         try_join_all(futures).await
     }
+
+    /// Batch add AST chunks to the BM25 index
+    ///
+    /// # Performance Requirements
+    ///
+    /// - **Single transaction**: All chunks in ONE `IndexWriter.commit()` call
+    /// - **NEVER** call `writer.commit()` in a loop
+    /// - **Dependencies**: Add each dependency as a separate text field value
+    ///
+    /// # Parameters
+    ///
+    /// * `chunks` - AST chunk list
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Batch add successful
+    /// * `Err(AppError)` - Batch add failed
+    async fn add_batch(&self, chunks: Vec<AstChunk>) -> Result<(), AppError>;
 }
 
 #[cfg(test)]
@@ -225,6 +243,10 @@ mod tests {
 
         async fn get_by_id(&self, _id: &str) -> Result<Option<Bm25Result>, AppError> {
             Ok(None)
+        }
+
+        async fn add_batch(&self, _chunks: Vec<AstChunk>) -> Result<(), AppError> {
+            Ok(())
         }
     }
 
