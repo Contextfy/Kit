@@ -17,7 +17,7 @@ use futures::StreamExt;
 
 use crate::embeddings::EmbeddingModel;
 use crate::kernel::errors::{AppError, InfraError};
-use crate::kernel::types::{Hit, Query, Score};
+use crate::kernel::types::{AstChunk, Hit, Query, Score};
 
 use super::trait_::VectorStoreTrait;
 
@@ -299,32 +299,48 @@ impl VectorStoreTrait for LanceDbStore {
                 Some(e),
             )))?;
 
-        // Step 4: Create Arrow record batch using shared schema
-        // Use the canonical schema from schema.rs to ensure alignment with table.add()
-        use crate::slices::vector::schema::{knowledge_record_schema, VECTOR_DIM};
-        use arrow::array::{FixedSizeListArray, Float32Array};
+        // Step 4: Create Arrow record batch using new AST chunk schema
+        // Map old fields to new AST chunk fields for backward compatibility
+        use crate::slices::vector::schema::{ast_chunk_schema, VECTOR_DIM};
+        use arrow::array::{FixedSizeListArray, Float32Array, StringArray};
 
         // Import the canonical schema
-        let schema = Arc::new(knowledge_record_schema());
+        let schema = Arc::new(ast_chunk_schema());
+
+        // Map old fields to new AST chunk fields:
+        // - id: same
+        // - file_path: use summary or "unknown"
+        // - symbol_name: use title (primary symbol)
+        // - node_type: default to "file" for backward compat
+        // - content: same (text)
+        // - dependencies: parse keywords as comma-separated or null
+        // - vector: embedding
+        let file_path = if summary.is_empty() { "unknown" } else { summary.as_str() };
+        let node_type = "file"; // Default for backward compat
+        let dependencies = keywords.map(|k| k.to_string());
 
         // Create arrays directly (must match schema field order)
         let id_array = StringArray::from(vec![id]);
-        let title_array = StringArray::from(vec![title.as_str()]);
-        let summary_array = StringArray::from(vec![summary.as_str()]);
+        let file_path_array = StringArray::from(vec![file_path]);
+        let symbol_name_array = StringArray::from(vec![title.as_str()]);
+        let node_type_array = StringArray::from(vec![node_type]);
         let content_array = StringArray::from(vec![text]);
-        let keywords_array = StringArray::from(vec![keywords]);
-        let source_path_array = StringArray::from(vec!["unknown"]);
+        let dependencies_array = StringArray::from(vec![
+            if dependencies.is_none() || dependencies.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
+                None
+            } else {
+                dependencies
+            }
+        ]);
 
         // Create FixedSizeListArray for vector (use VECTOR_DIM constant)
         let vector_values = Float32Array::from(embedding.clone());
-        // The field should describe the item inside the list (Float32), not the list itself
-        // FixedSizeListArray::new() will wrap it in FixedSizeList automatically
-        let vector_item_field = arrow::datatypes::Field::new("item", arrow::datatypes::DataType::Float32, false);
+        let vector_item_field = arrow::datatypes::Field::new("item", arrow::datatypes::DataType::Float32, true);
         let vector_array = FixedSizeListArray::new(
             Arc::new(vector_item_field),
-            VECTOR_DIM, // Use constant instead of hardcoded 384
+            VECTOR_DIM,
             Arc::new(vector_values),
-            None, // null bitmap (None means all values are valid)
+            None,
         );
 
         // Create the record batch
@@ -332,12 +348,12 @@ impl VectorStoreTrait for LanceDbStore {
             schema.clone(),
             vec![
                 Arc::new(id_array) as Arc<dyn arrow::array::Array>,
-                Arc::new(title_array) as Arc<dyn arrow::array::Array>,
-                Arc::new(summary_array) as Arc<dyn arrow::array::Array>,
+                Arc::new(file_path_array) as Arc<dyn arrow::array::Array>,
+                Arc::new(symbol_name_array) as Arc<dyn arrow::array::Array>,
+                Arc::new(node_type_array) as Arc<dyn arrow::array::Array>,
                 Arc::new(content_array) as Arc<dyn arrow::array::Array>,
+                Arc::new(dependencies_array) as Arc<dyn arrow::array::Array>,
                 Arc::new(vector_array) as Arc<dyn arrow::array::Array>,
-                Arc::new(keywords_array) as Arc<dyn arrow::array::Array>,
-                Arc::new(source_path_array) as Arc<dyn arrow::array::Array>,
             ],
         )
         .map_err(|e| {
@@ -424,6 +440,125 @@ impl VectorStoreTrait for LanceDbStore {
                 Some::<anyhow::Error>(e),
             ))
         })
+    }
+
+    /// Batch add AST chunks to the vector store
+    ///
+    /// # Performance Requirements
+    ///
+    /// - **Defense Line 1**: Use `embed_batch()` for all chunks at once (NEVER in a loop)
+    /// - **Defense Line 2**: Build a single `RecordBatch` for all chunks
+    /// - **Defense Line 3**: Single `table.add()` call (NEVER in a loop)
+    ///
+    /// # Parameters
+    ///
+    /// * `chunks` - AST chunk list
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Batch add successful
+    /// * `Err(AppError)` - Batch add failed
+    async fn add_batch(&self, chunks: Vec<AstChunk>) -> Result<(), AppError> {
+        if chunks.is_empty() {
+            return Ok(());
+        }
+
+        // **Defense Line 1**: Batch vector generation - NEVER in a loop
+        let contents: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
+        let embeddings = self
+            .embedding_model
+            .embed_batch(&contents)
+            .map_err(|e| AppError::Infra(InfraError::Other(format!(
+                "Failed to generate batch embeddings: {}",
+                e
+            ))))?;
+
+        // Verify embedding count matches chunk count
+        if embeddings.len() != chunks.len() {
+            return Err(AppError::Infra(InfraError::Other(format!(
+                "Embedding count mismatch: expected {}, got {}",
+                chunks.len(),
+                embeddings.len()
+            ))));
+        }
+
+        // **Defense Line 2**: Build Arrow RecordBatch
+        use crate::slices::vector::schema::{ast_chunk_schema, VECTOR_DIM};
+        use arrow::array::{FixedSizeListArray, Float32Array, StringArray};
+
+        let schema = Arc::new(ast_chunk_schema());
+
+        // Build arrays by field
+        let id_array = StringArray::from(chunks.iter().map(|c| c.id.as_str()).collect::<Vec<_>>());
+        let file_path_array = StringArray::from(chunks.iter().map(|c| c.file_path.as_str()).collect::<Vec<_>>());
+        let symbol_name_array = StringArray::from(chunks.iter().map(|c| c.symbol_name.as_str()).collect::<Vec<_>>());
+        let node_type_array = StringArray::from(chunks.iter().map(|c| c.node_type.as_str()).collect::<Vec<_>>());
+        let content_array = StringArray::from(chunks.iter().map(|c| c.content.as_str()).collect::<Vec<_>>());
+
+        // Dependencies: Serialize as comma-separated string
+        let dependencies_array = StringArray::from(
+            chunks.iter()
+                .map(|c| {
+                    if c.dependencies.is_empty() {
+                        None
+                    } else {
+                        Some(c.dependencies.join(","))
+                    }
+                })
+                .collect::<Vec<Option<String>>>()
+        );
+
+        // Vector: FixedSizeListArray (flatten all embeddings into one Float32Array)
+        let vector_item_field = arrow::datatypes::Field::new("item", arrow::datatypes::DataType::Float32, true);
+        let all_vector_values = Float32Array::from(
+            embeddings
+                .into_iter()
+                .flat_map(|vec| vec.into_iter())
+                .collect::<Vec<f32>>()
+        );
+        let vector_array = FixedSizeListArray::new(
+            Arc::new(vector_item_field),
+            VECTOR_DIM,
+            Arc::new(all_vector_values),
+            None,
+        );
+
+        // Create RecordBatch
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(id_array),
+                Arc::new(file_path_array),
+                Arc::new(symbol_name_array),
+                Arc::new(node_type_array),
+                Arc::new(content_array),
+                Arc::new(dependencies_array),
+                Arc::new(vector_array),
+            ],
+        ).map_err(|e| {
+            AppError::Infra(InfraError::Other(format!("Failed to create RecordBatch: {}", e)))
+        })?;
+
+        // **Defense Line 3**: Single LanceDB write - NEVER in a loop
+        let table = self.get_table().await
+            .map_err(|e| AppError::Infra(InfraError::database(
+                "Failed to open table for batch add",
+                Some(e),
+            )))?;
+
+        let batches = vec![batch];
+        let reader = RecordBatchIterator::new(
+            batches.into_iter().map(Ok),
+            schema,
+        );
+
+        table.add(reader).execute().await
+            .map_err(|e| AppError::Infra(InfraError::database(
+                "Failed to add batch to LanceDB",
+                Some(e),
+            )))?;
+
+        Ok(())
     }
 }
 

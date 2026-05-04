@@ -109,55 +109,75 @@ impl PartialOrd for Hit {
     }
 }
 
-/// A parsed AST chunk from a Python sidecar process
+/// AST Chunk - 代码语法树节点的语义表示
 ///
-/// Represents a code symbol (function, class, method, etc.) extracted by
-/// the Python `cocoindex` tool and transmitted via IPC (JSONL format).
+/// 此结构封装了代码分析结果（如来自 Cocoindex），包含文件路径、符号名、
+/// 节点类型、依赖关系等语义信息，并支持向量嵌入用于语义检索。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AstChunk {
-    /// Absolute or relative path to the source file
+    /// 唯一标识符（通常是内容哈希签名）
+    pub id: String,
+
+    /// 文件路径（如 `src/auth.rs` 或 `frontend/components/Button.tsx`）
     pub file_path: String,
 
-    /// Symbol name (e.g., "MyClass", "my_function")
+    /// 符号名（如 `AuthManager`, `Button`, `handleClick`）
+    /// **BM25 检索权重最高字段**
     pub symbol_name: String,
 
-    /// Node type (e.g., "function", "class", "method", "variable")
+    /// 节点类型（Enum 值）
+    /// 可能值：`file`, `class`, `function`, `method`, `variable`, `interface`, etc.
     pub node_type: String,
 
-    /// AST content representation (could be source code snippet or structured data)
-    pub ast_content: String,
+    /// 完整的代码块/AST 内容（用于向量嵌入和全文检索）
+    pub content: String,
 
-    /// List of dependencies (other symbols this chunk references)
+    /// 依赖列表（此节点引用的外部包/类/函数）
     #[serde(default)]
     pub dependencies: Vec<String>,
+
+    /// 向量嵌入（入库时生成，调用方无需提供）
+    /// 使用 BGE-small-en 模型生成 384 维向量
+    #[serde(skip)]
+    pub vector: Option<Vec<f32>>,
 }
 
 impl AstChunk {
     /// Create a new AST chunk
     pub fn new(
+        id: impl Into<String>,
         file_path: impl Into<String>,
         symbol_name: impl Into<String>,
         node_type: impl Into<String>,
-        ast_content: impl Into<String>,
+        content: impl Into<String>,
         dependencies: Vec<String>,
     ) -> Self {
         Self {
+            id: id.into(),
             file_path: file_path.into(),
             symbol_name: symbol_name.into(),
             node_type: node_type.into(),
-            ast_content: ast_content.into(),
+            content: content.into(),
             dependencies,
+            vector: None,
         }
     }
 
     /// Create an AST chunk with no dependencies
     pub fn without_dependencies(
+        id: impl Into<String>,
         file_path: impl Into<String>,
         symbol_name: impl Into<String>,
         node_type: impl Into<String>,
-        ast_content: impl Into<String>,
+        content: impl Into<String>,
     ) -> Self {
-        Self::new(file_path, symbol_name, node_type, ast_content, Vec::new())
+        Self::new(id, file_path, symbol_name, node_type, content, Vec::new())
+    }
+
+    /// Set the vector embedding (used by storage layer)
+    pub fn with_vector(mut self, vector: Vec<f32>) -> Self {
+        self.vector = Some(vector);
+        self
     }
 }
 
@@ -229,6 +249,7 @@ mod tests {
     #[test]
     fn test_ast_chunk_creation() {
         let chunk = AstChunk::new(
+            "hash-123",
             "/path/to/file.py",
             "MyClass",
             "class",
@@ -236,22 +257,26 @@ mod tests {
             vec!["OtherClass".to_string()],
         );
 
+        assert_eq!(chunk.id, "hash-123");
         assert_eq!(chunk.file_path, "/path/to/file.py");
         assert_eq!(chunk.symbol_name, "MyClass");
         assert_eq!(chunk.node_type, "class");
-        assert_eq!(chunk.ast_content, "class MyClass:\n    pass");
+        assert_eq!(chunk.content, "class MyClass:\n    pass");
         assert_eq!(chunk.dependencies, vec!["OtherClass"]);
+        assert!(chunk.vector.is_none());
     }
 
     #[test]
     fn test_ast_chunk_without_dependencies() {
         let chunk = AstChunk::without_dependencies(
+            "hash-456",
             "/path/to/file.py",
             "my_function",
             "function",
             "def my_function():\n    pass",
         );
 
+        assert_eq!(chunk.id, "hash-456");
         assert_eq!(chunk.file_path, "/path/to/file.py");
         assert_eq!(chunk.symbol_name, "my_function");
         assert_eq!(chunk.node_type, "function");
@@ -259,8 +284,24 @@ mod tests {
     }
 
     #[test]
+    fn test_ast_chunk_with_vector() {
+        let chunk = AstChunk::without_dependencies(
+            "hash-789",
+            "test.py",
+            "foo",
+            "function",
+            "pass",
+        ).with_vector(vec![0.1, 0.2, 0.3]);
+
+        assert_eq!(chunk.id, "hash-789");
+        assert!(chunk.vector.is_some());
+        assert_eq!(chunk.vector.unwrap(), vec![0.1, 0.2, 0.3]);
+    }
+
+    #[test]
     fn test_ast_chunk_serialization() {
         let chunk = AstChunk::new(
+            "hash-001",
             "test.py",
             "foo",
             "function",
@@ -270,20 +311,27 @@ mod tests {
 
         // Test serialization
         let json = serde_json::to_string(&chunk).unwrap();
+        assert!(json.contains("\"id\":\"hash-001\""));
         assert!(json.contains("\"file_path\":\"test.py\""));
         assert!(json.contains("\"symbol_name\":\"foo\""));
+        // Vector should be skipped in serialization
+        assert!(!json.contains("vector"));
 
         // Test deserialization
         let deserialized: AstChunk = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized, chunk);
+        assert_eq!(deserialized.id, chunk.id);
+        assert_eq!(deserialized.file_path, chunk.file_path);
+        assert_eq!(deserialized.symbol_name, chunk.symbol_name);
+        assert!(deserialized.vector.is_none()); // Vector not in JSON
     }
 
     #[test]
     fn test_ast_chunk_default_dependencies() {
         // JSON without dependencies field should default to empty array
-        let json = r#"{"file_path":"test.py","symbol_name":"foo","node_type":"function","ast_content":"pass"}"#;
+        let json = r#"{"id":"hash-002","file_path":"test.py","symbol_name":"foo","node_type":"function","content":"pass"}"#;
         let chunk: AstChunk = serde_json::from_str(json).unwrap();
 
+        assert_eq!(chunk.id, "hash-002");
         assert!(chunk.dependencies.is_empty());
     }
 }

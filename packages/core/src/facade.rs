@@ -15,6 +15,7 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use crate::embeddings::EmbeddingModel;
+use crate::kernel::types::AstChunk;
 use crate::slices::bm25::trait_::Bm25StoreTrait;
 use crate::slices::hybrid::HybridOrchestrator;
 use crate::slices::vector::VectorStoreTrait;
@@ -238,6 +239,25 @@ impl SearchEngine {
             .add(id, title, summary, content, keywords)
             .await
             .context("Failed to add document")
+    }
+
+    /// Batch add AST chunks to both stores
+    ///
+    /// This method is the high-level API for batch ingestion of AST chunks.
+    ///
+    /// # Parameters
+    ///
+    /// * `chunks` - AST chunk list
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Batch add successful
+    /// * `Err(Error)` - Batch add failed
+    pub async fn add_batch(&self, chunks: Vec<AstChunk>) -> Result<()> {
+        self.orchestrator
+            .add_batch(chunks)
+            .await
+            .context("Failed to add batch documents")
     }
 
     /// Delete a document from both stores

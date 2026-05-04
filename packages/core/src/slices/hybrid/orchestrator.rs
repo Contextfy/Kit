@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use crate::kernel::errors::{AppError, DomainError};
-use crate::kernel::types::{Hit, Query};
+use crate::kernel::types::{AstChunk, Hit, Query};
 
 use super::super::bm25::Bm25StoreTrait;
 use super::super::vector::VectorStoreTrait;
@@ -319,6 +319,48 @@ impl HybridOrchestrator {
         }
     }
 
+    /// Batch add AST chunks to both stores
+    ///
+    /// This method adds multiple AST chunks to both vector and BM25 stores concurrently.
+    ///
+    /// # Performance
+    ///
+    /// - VectorStore and Bm25Store execute concurrently
+    /// - Uses `tokio::try_join!` to wait for both backends
+    ///
+    /// # Parameters
+    ///
+    /// * `chunks` - AST chunk list
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Both backends succeeded
+    /// * `Err(AppError)` - At least one backend failed
+    pub async fn add_batch(&self, chunks: Vec<AstChunk>) -> Result<(), AppError> {
+        if chunks.is_empty() {
+            return Ok(());
+        }
+
+        info!("Adding {} chunks to hybrid stores", chunks.len());
+
+        // Execute batch add on both stores concurrently
+        let (vector_result, bm25_result) = tokio::try_join!(
+            self.vector_store.add_batch(chunks.clone()),
+            self.bm25_store.add_batch(chunks),
+        )
+        .map_err(|e| {
+            error!(error = ?e, "Both stores failed to add batch");
+            e
+        })?;
+
+        info!(
+            "Batch add completed: vector={:?}, bm25={:?}",
+            vector_result, bm25_result
+        );
+
+        Ok(())
+    }
+
     /// Delete a document from both stores
     ///
     /// This is a convenience method for deleting documents from both backends.
@@ -465,6 +507,17 @@ mod tests {
             }
         }
 
+        async fn add_batch(&self, _chunks: Vec<AstChunk>) -> Result<(), AppError> {
+            if self.add_should_fail {
+                Err(AppError::Infra(InfraError::database(
+                    "mock vector add_batch failed",
+                    None::<std::io::Error>,
+                )))
+            } else {
+                Ok(())
+            }
+        }
+
         async fn delete(&self, _id: &str) -> Result<bool, AppError> {
             if self.delete_should_fail {
                 Err(AppError::Infra(InfraError::database(
@@ -530,6 +583,17 @@ mod tests {
             if self.add_should_fail {
                 Err(AppError::Infra(InfraError::database(
                     "mock BM25 add failed",
+                    None::<std::io::Error>,
+                )))
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn add_batch(&self, _chunks: Vec<AstChunk>) -> Result<(), AppError> {
+            if self.add_should_fail {
+                Err(AppError::Infra(InfraError::database(
+                    "mock BM25 add_batch failed",
                     None::<std::io::Error>,
                 )))
             } else {
