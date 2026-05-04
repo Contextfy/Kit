@@ -76,7 +76,7 @@ impl BridgeApi {
             // Phase 2/3: Call actual search logic
             Ok::<SearchResponseDto, AppError>(SearchResponseDto::empty(0))
         })
-        .map_err(|e| BridgeError::from(e).into())
+        .map_err(|e| e.into())
         .and_then(|inner_result| inner_result.map_err(|e| BridgeError::from(e).into()))
     }
 
