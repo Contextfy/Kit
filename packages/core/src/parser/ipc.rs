@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn test_spawn_child_process_success() {
         // Use echo to simulate valid JSONL output
-        let json_line = r#"{"file_path":"test.py","symbol_name":"foo","node_type":"function","ast_content":"pass","dependencies":[]}"#;
+        let json_line = r#"{"id":"test-1","file_path":"test.py","symbol_name":"foo","node_type":"function","content":"pass","dependencies":[]}"#;
 
         let mut ipc = SidecarIPC::spawn(["echo", json_line]).expect("Failed to spawn");
 
@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(chunk.file_path, "test.py");
         assert_eq!(chunk.symbol_name, "foo");
         assert_eq!(chunk.node_type, "function");
-        assert_eq!(chunk.ast_content, "pass");
+        assert_eq!(chunk.content, "pass");
         assert!(chunk.dependencies.is_empty());
 
         // Second call should return None (EOF)
@@ -344,8 +344,8 @@ mod tests {
     #[test]
     fn test_multiple_chunks() {
         // Use printf to output multiple JSONL lines (more reliable than echo for special chars)
-        let json1 = r#"{"file_path":"test1.py","symbol_name":"foo","node_type":"function","ast_content":"pass","dependencies":[]}"#;
-        let json2 = r#"{"file_path":"test2.py","symbol_name":"bar","node_type":"class","ast_content":"class Bar","dependencies":[]}"#;
+        let json1 = r#"{"id":"test-3","file_path":"test1.py","symbol_name":"foo","node_type":"function","content":"pass","dependencies":[]}"#;
+        let json2 = r#"{"id":"test-4","file_path":"test2.py","symbol_name":"bar","node_type":"class","content":"class Bar","dependencies":[]}"#;
 
         // Use printf to output both lines
         let cmd = format!("printf '{}\\n{}\\n' '{}' '{}'", json1, json2, json1, json2);
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn test_default_dependencies() {
         // JSON without dependencies field
-        let json_line = r#"{"file_path":"test.py","symbol_name":"foo","node_type":"function","ast_content":"pass"}"#;
+        let json_line = r#"{"id":"test-2","file_path":"test.py","symbol_name":"foo","node_type":"function","content":"pass"}"#;
 
         let mut ipc = SidecarIPC::spawn(["echo", json_line]).expect("Failed to spawn");
 

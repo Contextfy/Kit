@@ -15,6 +15,7 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use crate::embeddings::EmbeddingModel;
+use crate::kernel::types::AstChunk;
 use crate::slices::bm25::trait_::Bm25StoreTrait;
 use crate::slices::hybrid::HybridOrchestrator;
 use crate::slices::vector::VectorStoreTrait;
@@ -240,6 +241,25 @@ impl SearchEngine {
             .context("Failed to add document")
     }
 
+    /// Batch add AST chunks to both stores
+    ///
+    /// This method is the high-level API for batch ingestion of AST chunks.
+    ///
+    /// # Parameters
+    ///
+    /// * `chunks` - AST chunk list
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Batch add successful
+    /// * `Err(Error)` - Batch add failed
+    pub async fn add_batch(&self, chunks: Vec<AstChunk>) -> Result<()> {
+        self.orchestrator
+            .add_batch(chunks)
+            .await
+            .context("Failed to add batch documents")
+    }
+
     /// Delete a document from both stores
     ///
     /// # Parameters
@@ -296,9 +316,12 @@ impl SearchEngine {
             .map(|opt_result| {
                 opt_result.map(|r| DocumentDetails {
                     id: r.id,
-                    title: r.title,
-                    summary: r.summary,
+                    symbol_name: r.symbol_name.clone(),
+                    file_path: r.file_path.clone(),
                     content: r.content,
+                    // Legacy fields for backward compatibility
+                    title: r.symbol_name,
+                    summary: r.file_path,
                 })
             })
     }
@@ -332,9 +355,12 @@ impl SearchEngine {
             .map(|opt_result| {
                 opt_result.map(|r| DocumentDetails {
                     id: r.id,
-                    title: r.title,
-                    summary: r.summary,
+                    symbol_name: r.symbol_name.clone(),
+                    file_path: r.file_path.clone(),
                     content: r.content,
+                    // Legacy fields for backward compatibility
+                    title: r.symbol_name,
+                    summary: r.file_path,
                 })
             })
             .collect())
@@ -351,12 +377,18 @@ impl SearchEngine {
 pub struct DocumentDetails {
     /// Document ID
     pub id: String,
-    /// Document title
-    pub title: String,
-    /// Document summary
-    pub summary: String,
+    /// Symbol name (highest BM25 weight field)
+    pub symbol_name: String,
+    /// File path
+    pub file_path: String,
     /// Full document content (None indicates data integrity issue)
     pub content: Option<String>,
+    /// Legacy field: title (backward compatibility alias for symbol_name)
+    #[deprecated(note = "Use `symbol_name` instead")]
+    pub title: String,
+    /// Legacy field: summary (backward compatibility alias for file_path)
+    #[deprecated(note = "Use `file_path` instead")]
+    pub summary: String,
 }
 
 #[cfg(test)]
@@ -439,5 +471,58 @@ mod tests {
                 "Should find the document we just added"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_add_batch_smoke() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let lancedb_uri = temp_dir.path().join("lancedb");
+        let lancedb_uri_str = lancedb_uri.to_str().expect("Invalid path");
+
+        let engine = SearchEngine::new(None, lancedb_uri_str, "test_batch")
+            .await
+            .expect("Failed to create engine");
+
+        // Create test AST chunks
+        use crate::kernel::types::AstChunk;
+        let chunks = vec![
+            AstChunk {
+                id: "batch-doc-1".to_string(),
+                file_path: "src/auth.rs".to_string(),
+                symbol_name: "AuthManager".to_string(),
+                node_type: "class".to_string(),
+                content: "class AuthManager { ... }".to_string(),
+                dependencies: vec!["User".to_string()],
+                vector: None,
+            },
+            AstChunk {
+                id: "batch-doc-2".to_string(),
+                file_path: "src/user.rs".to_string(),
+                symbol_name: "User".to_string(),
+                node_type: "class".to_string(),
+                content: "class User { ... }".to_string(),
+                dependencies: vec![],
+                vector: None,
+            },
+        ];
+
+        // Add batch
+        engine
+            .add_batch(chunks)
+            .await
+            .expect("Batch add should succeed");
+
+        // Verify by searching for one of the symbols
+        let results = engine
+            .search("AuthManager", 10)
+            .await
+            .expect("Search should not error");
+
+        // At least one result should be found
+        assert!(!results.is_empty(), "Should find the added batch documents");
+        assert_eq!(
+            results[0].id, "batch-doc-1",
+            "Should find the AuthManager document"
+        );
     }
 }

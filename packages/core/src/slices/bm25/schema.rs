@@ -11,27 +11,35 @@ use tantivy::schema::{Schema, TextFieldIndexing, TextOptions, STORED};
 ///
 /// These constants define the field names used in the Tantivy index.
 pub(crate) const FIELD_ID: &str = "id";
-pub(crate) const FIELD_TITLE: &str = "title";
-pub(crate) const FIELD_SUMMARY: &str = "summary";
+pub(crate) const FIELD_FILE_PATH: &str = "file_path";
+pub(crate) const FIELD_SYMBOL_NAME: &str = "symbol_name";  // **Highest BM25 weight**
+pub(crate) const FIELD_NODE_TYPE: &str = "node_type";
 pub(crate) const FIELD_CONTENT: &str = "content";
-pub(crate) const FIELD_KEYWORDS: &str = "keywords";
+pub(crate) const FIELD_DEPENDENCIES: &str = "dependencies";
 
-/// Create Tantivy schema for BM25 full-text search
+/// Create Tantivy schema for AST chunk BM25 full-text search
 ///
-/// This schema defines the structure of documents stored in Tantivy.
+/// This schema defines the structure of AST chunks stored in Tantivy.
 ///
 /// # Fields
 ///
-/// - `id`: Unique record identifier (STRING, STORED, not tokenized)
-/// - `title`: Document title (TEXT, TOKENIZED, STORED, with jieba tokenizer)
-/// - `summary`: Document summary (TEXT, TOKENIZED, STORED, with jieba tokenizer)
-/// - `content`: Document content (TEXT, TOKENIZED, STORED, with jieba tokenizer)
-/// - `keywords`: Document keywords (TEXT, TOKENIZED, STORED, with jieba tokenizer)
+/// - `id`: Unique chunk identifier (STRING, STORED, not tokenized)
+/// - `file_path`: File path (TEXT, TOKENIZED, STORED, with jieba tokenizer)
+/// - `symbol_name`: Symbol name (TEXT, TOKENIZED, STORED, **5.0x weight**, with jieba tokenizer)
+/// - `node_type`: Node type (TEXT, TOKENIZED, STORED, with jieba tokenizer)
+/// - `content`: Full content (TEXT, TOKENIZED, STORED, with jieba tokenizer)
+/// - `dependencies`: Dependencies as multi-value TEXT field (TOKENIZED, STORED, with jieba tokenizer)
 ///
 /// # Tokenization
 ///
 /// All TEXT fields use the Jieba tokenizer for Chinese text segmentation.
 /// The tokenizer must be registered with the index before searching.
+///
+/// # Field Weights
+///
+/// - `symbol_name`: 5.0x (highest priority for precise symbol retrieval)
+/// - `dependencies`: 2.0x (secondary priority for dependency matching)
+/// - `content`: 1.0x (baseline weight)
 ///
 /// # Invariants
 ///
@@ -53,10 +61,11 @@ pub(crate) fn create_bm25_schema() -> Schema {
     schema_builder.add_text_field(FIELD_ID, tantivy::schema::STRING | STORED);
 
     // Add TEXT fields with tokenization and storage, using Jieba tokenizer
-    schema_builder.add_text_field(FIELD_TITLE, text_options.clone());
-    schema_builder.add_text_field(FIELD_SUMMARY, text_options.clone());
+    schema_builder.add_text_field(FIELD_FILE_PATH, text_options.clone());
+    schema_builder.add_text_field(FIELD_SYMBOL_NAME, text_options.clone());  // **Highest weight**
+    schema_builder.add_text_field(FIELD_NODE_TYPE, text_options.clone());
     schema_builder.add_text_field(FIELD_CONTENT, text_options.clone());
-    schema_builder.add_text_field(FIELD_KEYWORDS, text_options);
+    schema_builder.add_text_field(FIELD_DEPENDENCIES, text_options);  // Multi-value field
 
     schema_builder.build()
 }
@@ -121,10 +130,11 @@ pub(crate) fn validate_bm25_schema(schema: &Schema) -> Result<(), String> {
     // Verify all expected fields exist with correct types and properties
     for field_name in &[
         FIELD_ID,
-        FIELD_TITLE,
-        FIELD_SUMMARY,
+        FIELD_FILE_PATH,
+        FIELD_SYMBOL_NAME,
+        FIELD_NODE_TYPE,
         FIELD_CONTENT,
-        FIELD_KEYWORDS,
+        FIELD_DEPENDENCIES,
     ] {
         // Check field exists
         let field = schema
@@ -226,8 +236,8 @@ mod tests {
     fn test_create_bm25_schema() {
         let schema = create_bm25_schema();
 
-        // Verify 5 fields
-        assert_eq!(schema.fields().count(), 5);
+        // Verify 6 fields
+        assert_eq!(schema.fields().count(), 6);
 
         // Verify field names
         let field_names: Vec<_> = schema
@@ -238,10 +248,11 @@ mod tests {
             field_names,
             vec![
                 FIELD_ID,
-                FIELD_TITLE,
-                FIELD_SUMMARY,
+                FIELD_FILE_PATH,
+                FIELD_SYMBOL_NAME,
+                FIELD_NODE_TYPE,
                 FIELD_CONTENT,
-                FIELD_KEYWORDS
+                FIELD_DEPENDENCIES
             ]
         );
     }
@@ -266,19 +277,28 @@ mod tests {
 
     #[test]
     fn test_validate_bm25_schema_missing_field() {
-        // Create a schema with correct field count but missing title field
-        // We need to add an extra field to keep count at 5
+        // Create a schema with correct field count but missing symbol_name field
+        // We need to add an extra field to keep count at 6
+        // All TEXT fields must use jieba tokenizer to match expected schema
+        let text_indexing = TextFieldIndexing::default().set_tokenizer("jieba");
+        let text_options = TextOptions::default()
+            .set_indexing_options(text_indexing)
+            .set_stored();
+
         let mut builder = Schema::builder();
         builder.add_text_field(FIELD_ID, tantivy::schema::STRING | STORED);
-        builder.add_text_field(FIELD_SUMMARY, TEXT | STORED);
-        builder.add_text_field(FIELD_CONTENT, TEXT | STORED);
-        builder.add_text_field(FIELD_KEYWORDS, TEXT | STORED);
-        builder.add_text_field("extra_field", TEXT | STORED); // Extra field to maintain count
+        builder.add_text_field(FIELD_FILE_PATH, text_options.clone());
+        builder.add_text_field(FIELD_NODE_TYPE, text_options.clone());
+        builder.add_text_field(FIELD_CONTENT, text_options.clone());
+        builder.add_text_field(FIELD_DEPENDENCIES, text_options.clone());
+        builder.add_text_field("extra_field", text_options); // Extra field to maintain count
         let wrong_schema = builder.build();
 
         let result = validate_bm25_schema(&wrong_schema);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Missing field 'title'"));
+        let err_msg = result.unwrap_err();
+        // The error should mention that symbol_name field is missing
+        assert!(err_msg.contains("symbol_name"), "Expected error about missing symbol_name field, got: {}", err_msg);
     }
 
     #[test]
@@ -286,10 +306,11 @@ mod tests {
         // Create a schema where ID field is TEXT instead of STRING
         let mut builder = Schema::builder();
         builder.add_text_field(FIELD_ID, TEXT | STORED); // Wrong: should be STRING
-        builder.add_text_field(FIELD_TITLE, TEXT | STORED);
-        builder.add_text_field(FIELD_SUMMARY, TEXT | STORED);
+        builder.add_text_field(FIELD_FILE_PATH, TEXT | STORED);
+        builder.add_text_field(FIELD_SYMBOL_NAME, TEXT | STORED);
+        builder.add_text_field(FIELD_NODE_TYPE, TEXT | STORED);
         builder.add_text_field(FIELD_CONTENT, TEXT | STORED);
-        builder.add_text_field(FIELD_KEYWORDS, TEXT | STORED);
+        builder.add_text_field(FIELD_DEPENDENCIES, TEXT | STORED);
         let wrong_schema = builder.build();
 
         let result = validate_bm25_schema(&wrong_schema);
@@ -303,10 +324,11 @@ mod tests {
         let mut builder = Schema::builder();
         builder.add_text_field(FIELD_ID, tantivy::schema::STRING | STORED);
         // Add TEXT fields without custom tokenizer (uses default)
-        builder.add_text_field(FIELD_TITLE, TEXT | STORED);
-        builder.add_text_field(FIELD_SUMMARY, TEXT | STORED);
+        builder.add_text_field(FIELD_FILE_PATH, TEXT | STORED);
+        builder.add_text_field(FIELD_SYMBOL_NAME, TEXT | STORED);
+        builder.add_text_field(FIELD_NODE_TYPE, TEXT | STORED);
         builder.add_text_field(FIELD_CONTENT, TEXT | STORED);
-        builder.add_text_field(FIELD_KEYWORDS, TEXT | STORED);
+        builder.add_text_field(FIELD_DEPENDENCIES, TEXT | STORED);
         let wrong_schema = builder.build();
 
         let result = validate_bm25_schema(&wrong_schema);
@@ -321,10 +343,11 @@ mod tests {
         // Create a schema where a field is not stored
         let mut builder = Schema::builder();
         builder.add_text_field(FIELD_ID, tantivy::schema::STRING | STORED);
-        builder.add_text_field(FIELD_TITLE, TEXT); // Not stored
-        builder.add_text_field(FIELD_SUMMARY, TEXT | STORED);
+        builder.add_text_field(FIELD_FILE_PATH, TEXT | STORED);
+        builder.add_text_field(FIELD_SYMBOL_NAME, TEXT); // Not stored
+        builder.add_text_field(FIELD_NODE_TYPE, TEXT | STORED);
         builder.add_text_field(FIELD_CONTENT, TEXT | STORED);
-        builder.add_text_field(FIELD_KEYWORDS, TEXT | STORED);
+        builder.add_text_field(FIELD_DEPENDENCIES, TEXT | STORED);
         let wrong_schema = builder.build();
 
         let result = validate_bm25_schema(&wrong_schema);
@@ -344,10 +367,11 @@ mod tests {
 
         let mut builder = Schema::builder();
         builder.add_text_field(FIELD_ID, text_options); // Wrong: ID should use "raw" tokenizer
-        builder.add_text_field(FIELD_TITLE, TEXT | STORED);
-        builder.add_text_field(FIELD_SUMMARY, TEXT | STORED);
+        builder.add_text_field(FIELD_FILE_PATH, TEXT | STORED);
+        builder.add_text_field(FIELD_SYMBOL_NAME, TEXT | STORED);
+        builder.add_text_field(FIELD_NODE_TYPE, TEXT | STORED);
         builder.add_text_field(FIELD_CONTENT, TEXT | STORED);
-        builder.add_text_field(FIELD_KEYWORDS, TEXT | STORED);
+        builder.add_text_field(FIELD_DEPENDENCIES, TEXT | STORED);
         let wrong_schema = builder.build();
 
         let result = validate_bm25_schema(&wrong_schema);
@@ -364,9 +388,10 @@ mod tests {
     #[test]
     fn test_field_constants() {
         assert_eq!(FIELD_ID, "id");
-        assert_eq!(FIELD_TITLE, "title");
-        assert_eq!(FIELD_SUMMARY, "summary");
+        assert_eq!(FIELD_SYMBOL_NAME, "symbol_name");
+        assert_eq!(FIELD_FILE_PATH, "file_path");
+        assert_eq!(FIELD_NODE_TYPE, "node_type");
         assert_eq!(FIELD_CONTENT, "content");
-        assert_eq!(FIELD_KEYWORDS, "keywords");
+        assert_eq!(FIELD_DEPENDENCIES, "dependencies");
     }
 }

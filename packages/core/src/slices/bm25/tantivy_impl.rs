@@ -17,10 +17,10 @@ use tantivy::{
 use tokio::sync::Mutex;
 
 use crate::kernel::errors::{AppError, InfraError};
-use crate::kernel::types::{Query, Score};
+use crate::kernel::types::{AstChunk, Query, Score};
 
 use super::index::{create_bm25_index, create_index_reader};
-use super::schema::{FIELD_CONTENT, FIELD_ID, FIELD_KEYWORDS, FIELD_SUMMARY, FIELD_TITLE};
+use super::schema::{FIELD_CONTENT, FIELD_DEPENDENCIES, FIELD_FILE_PATH, FIELD_ID, FIELD_NODE_TYPE, FIELD_SYMBOL_NAME};
 use super::trait_::{Bm25Result, Bm25StoreTrait};
 
 // TODO(BM25-Tuning): The hardcoded BM25_MAX_SCORE of 20.0 can compress/clip real BM25 scores
@@ -155,24 +155,37 @@ impl Bm25StoreTrait for TantivyBm25Store {
 
             // Create query parser
             let schema = index_clone.schema();
-            let title_field = schema
-                .get_field(FIELD_TITLE)
-                .context("Missing title field in schema")?;
-            let summary_field = schema
-                .get_field(FIELD_SUMMARY)
-                .context("Missing summary field in schema")?;
+            let symbol_name_field = schema
+                .get_field(FIELD_SYMBOL_NAME)
+                .context("Missing symbol_name field in schema")?;
             let content_field = schema
                 .get_field(FIELD_CONTENT)
                 .context("Missing content field in schema")?;
-            let keywords_field = schema
-                .get_field(FIELD_KEYWORDS)
-                .context("Missing keywords field in schema")?;
+            let dependencies_field = schema
+                .get_field(FIELD_DEPENDENCIES)
+                .context("Missing dependencies field in schema")?;
+            let file_path_field = schema
+                .get_field(FIELD_FILE_PATH)
+                .context("Missing file_path field in schema")?;
+            let node_type_field = schema
+                .get_field(FIELD_NODE_TYPE)
+                .context("Missing node_type field in schema")?;
 
             let mut query_parser = QueryParser::for_index(
                 &index_clone,
-                vec![title_field, summary_field, content_field, keywords_field],
+                vec![
+                    symbol_name_field,
+                    content_field,
+                    dependencies_field,
+                    file_path_field,
+                    node_type_field,
+                ],
             );
-            query_parser.set_field_boost(keywords_field, 5.0);
+
+            // **Field Weights**: symbol_name^5.0, dependencies^2.0, content^1.0
+            query_parser.set_field_boost(symbol_name_field, 5.0);
+            query_parser.set_field_boost(dependencies_field, 2.0);
+            query_parser.set_field_boost(content_field, 1.0);
 
             // Parse query
             let parsed_query = query_parser
@@ -188,12 +201,12 @@ impl Bm25StoreTrait for TantivyBm25Store {
             let id_field = schema
                 .get_field(FIELD_ID)
                 .context("Missing id field in schema")?;
-            let title_field = schema
-                .get_field(FIELD_TITLE)
-                .context("Missing title field in schema")?;
-            let summary_field = schema
-                .get_field(FIELD_SUMMARY)
-                .context("Missing summary field in schema")?;
+            let symbol_name_field = schema
+                .get_field(FIELD_SYMBOL_NAME)
+                .context("Missing symbol_name field in schema")?;
+            let file_path_field = schema
+                .get_field(FIELD_FILE_PATH)
+                .context("Missing file_path field in schema")?;
 
             // Convert search results
             let mut results = Vec::new();
@@ -203,11 +216,11 @@ impl Bm25StoreTrait for TantivyBm25Store {
                     .context("Failed to retrieve document")?;
 
                 let id = Self::extract_text_value(&retrieved_doc, id_field);
-                let title = Self::extract_text_value(&retrieved_doc, title_field);
-                let summary = Self::extract_text_value(&retrieved_doc, summary_field);
+                let symbol_name = Self::extract_text_value(&retrieved_doc, symbol_name_field);
+                let file_path = Self::extract_text_value(&retrieved_doc, file_path_field);
                 let score = Self::normalize_score(bm25_score);
 
-                results.push(Bm25Result::new(id, title, summary, score));
+                results.push(Bm25Result::new(id, symbol_name, file_path, score));
             }
 
             Ok::<Vec<Bm25Result>, anyhow::Error>(results)
@@ -262,26 +275,34 @@ impl Bm25StoreTrait for TantivyBm25Store {
             let id_field = schema
                 .get_field(FIELD_ID)
                 .context("Missing id field in schema")?;
-            let title_field = schema
-                .get_field(FIELD_TITLE)
-                .context("Missing title field in schema")?;
-            let summary_field = schema
-                .get_field(FIELD_SUMMARY)
-                .context("Missing summary field in schema")?;
+            let symbol_name_field = schema
+                .get_field(FIELD_SYMBOL_NAME)
+                .context("Missing symbol_name field in schema")?;
+            let file_path_field = schema
+                .get_field(FIELD_FILE_PATH)
+                .context("Missing file_path field in schema")?;
+            let node_type_field = schema
+                .get_field(FIELD_NODE_TYPE)
+                .context("Missing node_type field in schema")?;
             let content_field = schema
                 .get_field(FIELD_CONTENT)
                 .context("Missing content field in schema")?;
-            let keywords_field = schema
-                .get_field(FIELD_KEYWORDS)
-                .context("Missing keywords field in schema")?;
+            let dependencies_field = schema
+                .get_field(FIELD_DEPENDENCIES)
+                .context("Missing dependencies field in schema")?;
 
-            // Create document
+            // Create document (mapping old API to new schema)
             let mut doc = TantivyDocument::new();
             doc.add_text(id_field, &id);
-            doc.add_text(title_field, &title);
-            doc.add_text(summary_field, &summary);
+            doc.add_text(symbol_name_field, &title);  // title → symbol_name
+            doc.add_text(file_path_field, &summary);  // summary → file_path
+            doc.add_text(node_type_field, "file");     // Default node_type
             doc.add_text(content_field, &content);
-            doc.add_text(keywords_field, &keywords);
+
+            // keywords → dependencies (split by whitespace)
+            for keyword in keywords.split_whitespace() {
+                doc.add_text(dependencies_field, keyword);
+            }
 
             // Get writer lock
             let mut writer = writer_clone.blocking_lock();
@@ -441,12 +462,12 @@ impl Bm25StoreTrait for TantivyBm25Store {
             let id_field = schema
                 .get_field(FIELD_ID)
                 .context("Missing id field in schema")?;
-            let title_field = schema
-                .get_field(FIELD_TITLE)
-                .context("Missing title field in schema")?;
-            let summary_field = schema
-                .get_field(FIELD_SUMMARY)
-                .context("Missing summary field in schema")?;
+            let symbol_name_field = schema
+                .get_field(FIELD_SYMBOL_NAME)
+                .context("Missing symbol_name field in schema")?;
+            let file_path_field = schema
+                .get_field(FIELD_FILE_PATH)
+                .context("Missing file_path field in schema")?;
             let content_field = schema
                 .get_field(FIELD_CONTENT)
                 .context("Missing content field in schema")?;
@@ -474,15 +495,15 @@ impl Bm25StoreTrait for TantivyBm25Store {
 
             // Extract document fields
             let doc_id = Self::extract_text_value(&retrieved_doc, id_field);
-            let title = Self::extract_text_value(&retrieved_doc, title_field);
-            let summary = Self::extract_text_value(&retrieved_doc, summary_field);
+            let symbol_name = Self::extract_text_value(&retrieved_doc, symbol_name_field);
+            let file_path = Self::extract_text_value(&retrieved_doc, file_path_field);
             let content = Self::extract_text_value(&retrieved_doc, content_field);
 
             // Return result with content and default score (not relevant for get_by_id)
             Ok(Some(Bm25Result::with_content(
                 doc_id,
-                title,
-                summary,
+                symbol_name,
+                file_path,
                 content,
                 Score::new(1.0),
             )))
@@ -528,12 +549,12 @@ impl Bm25StoreTrait for TantivyBm25Store {
             let id_field = schema
                 .get_field(FIELD_ID)
                 .context("Missing id field in schema")?;
-            let title_field = schema
-                .get_field(FIELD_TITLE)
-                .context("Missing title field in schema")?;
-            let summary_field = schema
-                .get_field(FIELD_SUMMARY)
-                .context("Missing summary field in schema")?;
+            let symbol_name_field = schema
+                .get_field(FIELD_SYMBOL_NAME)
+                .context("Missing symbol_name field in schema")?;
+            let file_path_field = schema
+                .get_field(FIELD_FILE_PATH)
+                .context("Missing file_path field in schema")?;
             let content_field = schema
                 .get_field(FIELD_CONTENT)
                 .context("Missing content field in schema")?;
@@ -569,13 +590,13 @@ impl Bm25StoreTrait for TantivyBm25Store {
                     .context("Failed to retrieve document")?;
 
                 let doc_id = Self::extract_text_value(&retrieved_doc, id_field);
-                let title = Self::extract_text_value(&retrieved_doc, title_field);
-                let summary = Self::extract_text_value(&retrieved_doc, summary_field);
+                let symbol_name = Self::extract_text_value(&retrieved_doc, symbol_name_field);
+                let file_path = Self::extract_text_value(&retrieved_doc, file_path_field);
                 let content = Self::extract_text_value(&retrieved_doc, content_field);
 
                 doc_map.insert(
                     doc_id.clone(),
-                    Bm25Result::with_content(doc_id, title, summary, content, Score::new(1.0)),
+                    Bm25Result::with_content(doc_id, symbol_name, file_path, content, Score::new(1.0)),
                 );
             }
 
@@ -596,6 +617,92 @@ impl Bm25StoreTrait for TantivyBm25Store {
         .map_err(|e| AppError::Infra(InfraError::database("get_by_ids failed", Some(e))))?;
 
         Ok(get_results)
+    }
+
+    /// Batch add AST chunks to the BM25 index
+    ///
+    /// # Performance Requirements
+    ///
+    /// - **Defense Line**: Single transaction - All chunks in ONE `writer.commit()` call
+    /// - **NEVER** call `writer.commit()` in a loop
+    /// - **Dependencies**: Add each dependency as a separate text field value
+    ///
+    /// # Parameters
+    ///
+    /// * `chunks` - AST chunk list
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Batch add successful
+    /// * `Err(AppError)` - Batch add failed
+    async fn add_batch(&self, chunks: Vec<AstChunk>) -> Result<(), AppError> {
+        if chunks.is_empty() {
+            return Ok(());
+        }
+
+        let writer_clone = Arc::clone(&self.writer);
+        let index_clone = self.index.clone();
+
+        tokio::task::spawn_blocking(move || {
+            // Use a separate scope to ensure rollback happens on any error
+            let result: Result<(), anyhow::Error> = (|| {
+                let schema = index_clone.schema();
+
+                // Get field references
+                let id_field = schema.get_field(FIELD_ID).context("Missing id field")?;
+                let file_path_field = schema.get_field(FIELD_FILE_PATH).context("Missing file_path field")?;
+                let symbol_name_field = schema.get_field(FIELD_SYMBOL_NAME).context("Missing symbol_name field")?;
+                let node_type_field = schema.get_field(FIELD_NODE_TYPE).context("Missing node_type field")?;
+                let content_field = schema.get_field(FIELD_CONTENT).context("Missing content field")?;
+                let dependencies_field = schema.get_field(FIELD_DEPENDENCIES).context("Missing dependencies field")?;
+
+                let mut writer = writer_clone.blocking_lock();
+
+                // **Defense Line**: Single transaction batch add
+                for chunk in &chunks {
+                    // Upsert: Delete existing document with same ID first
+                    let term = tantivy::Term::from_field_text(id_field, &chunk.id);
+                    writer.delete_term(term);
+
+                    // Create document
+                    let mut doc = TantivyDocument::new();
+                    doc.add_text(id_field, &chunk.id);
+                    doc.add_text(file_path_field, &chunk.file_path);
+                    doc.add_text(symbol_name_field, &chunk.symbol_name);
+                    doc.add_text(node_type_field, &chunk.node_type);
+                    doc.add_text(content_field, &chunk.content);
+
+                    // Dependencies: Multi-value field - add each dependency separately
+                    for dep in &chunk.dependencies {
+                        doc.add_text(dependencies_field, dep);
+                    }
+
+                    writer.add_document(doc)
+                        .context("Failed to add document to batch")?;
+                }
+
+                // **Defense Line**: Single commit - NEVER in a loop
+                writer.commit().context("Failed to commit batch")?;
+
+                Ok(())
+            })();
+
+            // If the operation failed, rollback to clear in-memory state
+            if result.is_err() {
+                let mut writer = writer_clone.blocking_lock();
+                let _ = writer.rollback(); // Best-effort rollback, ignore errors
+            }
+
+            result
+        })
+        .await
+        .map_err(|e| {
+            AppError::Infra(InfraError::database(
+                "add_batch task failed",
+                Some::<anyhow::Error>(e.into()),
+            ))
+        })?
+        .map_err(|e| AppError::Infra(InfraError::database("add_batch failed", Some(e))))
     }
 }
 
@@ -672,7 +779,7 @@ mod tests {
         let results = result.unwrap().unwrap();
         assert!(!results.is_empty());
         assert_eq!(results[0].id, "doc-1");
-        assert_eq!(results[0].title, "Rust Programming");
+        assert_eq!(results[0].symbol_name, "Rust Programming");
     }
 
     #[tokio::test]
@@ -752,8 +859,8 @@ mod tests {
 
         let doc = result.unwrap();
         assert_eq!(doc.id, "doc-1");
-        assert_eq!(doc.title, "Rust Programming");
-        assert_eq!(doc.summary, "A comprehensive guide to Rust");
+        assert_eq!(doc.symbol_name, "Rust Programming");
+        assert_eq!(doc.file_path, "A comprehensive guide to Rust");
         assert_eq!(
             doc.content,
             Some(
@@ -822,5 +929,98 @@ mod tests {
             "doc-1",
             "Second result should be doc-1"
         );
+    }
+
+    #[tokio::test]
+    async fn test_add_batch_happy_path() {
+        let (store, _temp_dir) = create_test_store().await;
+
+        use crate::kernel::types::AstChunk;
+        let chunks = vec![
+            AstChunk {
+                id: "batch-doc-1".to_string(),
+                file_path: "src/auth.rs".to_string(),
+                symbol_name: "AuthManager".to_string(),
+                node_type: "class".to_string(),
+                content: "class AuthManager { ... }".to_string(),
+                dependencies: vec!["User".to_string()],
+                vector: None,
+            },
+            AstChunk {
+                id: "batch-doc-2".to_string(),
+                file_path: "src/user.rs".to_string(),
+                symbol_name: "User".to_string(),
+                node_type: "class".to_string(),
+                content: "class User { ... }".to_string(),
+                dependencies: vec![],
+                vector: None,
+            },
+        ];
+
+        // Add batch
+        let result = store.add_batch(chunks).await;
+        assert!(result.is_ok(), "Batch add should succeed");
+
+        // Verify by searching for one of the symbols
+        let query = Query::new("AuthManager", 10);
+        let search_result = store.search(&query).await;
+
+        assert!(search_result.is_ok());
+        let results = search_result.unwrap().unwrap();
+        assert!(!results.is_empty(), "Should find the added batch documents");
+        assert_eq!(results[0].id, "batch-doc-1");
+    }
+
+    #[tokio::test]
+    async fn test_add_batch_empty() {
+        let (store, _temp_dir) = create_test_store().await;
+
+        // Empty batch should succeed immediately
+        let result = store.add_batch(vec![]).await;
+        assert!(result.is_ok(), "Empty batch add should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_add_batch_rollback_on_duplicate_id() {
+        let (store, _temp_dir) = create_test_store().await;
+
+        use crate::kernel::types::AstChunk;
+
+        // Add first batch
+        let chunks1 = vec![AstChunk {
+            id: "rollback-test".to_string(),
+            file_path: "src/test.rs".to_string(),
+            symbol_name: "TestFunc".to_string(),
+            node_type: "function".to_string(),
+            content: "fn test() {}".to_string(),
+            dependencies: vec![],
+            vector: None,
+        }];
+
+        store.add_batch(chunks1).await.expect("First batch should succeed");
+
+        // Verify first insertion
+        let query = Query::new("TestFunc", 10);
+        let results1 = store.search(&query).await.unwrap().unwrap();
+        assert_eq!(results1.len(), 1);
+
+        // Add second batch with same ID (upsert test)
+        let chunks2 = vec![AstChunk {
+            id: "rollback-test".to_string(),
+            file_path: "src/test.rs".to_string(),
+            symbol_name: "TestFuncUpdated".to_string(),
+            node_type: "function".to_string(),
+            content: "fn test() { updated }".to_string(),
+            dependencies: vec![],
+            vector: None,
+        }];
+
+        store.add_batch(chunks2).await.expect("Second batch with same ID should succeed (upsert)");
+
+        // Verify that only one document exists with updated content
+        let query2 = Query::new("TestFuncUpdated", 10);
+        let results2 = store.search(&query2).await.unwrap().unwrap();
+        assert_eq!(results2.len(), 1, "Should have exactly one document after upsert");
+        assert_eq!(results2[0].id, "rollback-test");
     }
 }

@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use lancedb::connection::Connection as LanceConnection;
 use std::sync::Arc;
 
-use super::schema::{knowledge_record_schema, validate_knowledge_schema};
+use super::schema::{ast_chunk_schema, validate_ast_chunk_schema};
 
 /// Connect to a LanceDB database
 ///
@@ -86,7 +86,7 @@ pub(crate) async fn create_table_if_not_exists(
             .with_context(|| format!("Failed to get schema for existing table: {}", table_name))?;
 
         // Validate schema matches expected structure
-        validate_knowledge_schema(&existing_schema).map_err(|e| {
+        validate_ast_chunk_schema(&existing_schema).map_err(|e| {
             anyhow::anyhow!("Table '{}' exists but schema mismatch: {}", table_name, e)
         })?;
 
@@ -94,7 +94,7 @@ pub(crate) async fn create_table_if_not_exists(
     }
 
     // Table doesn't exist - create new table
-    let schema = Arc::new(knowledge_record_schema());
+    let schema = Arc::new(ast_chunk_schema());
     let new_table = conn
         .create_empty_table(table_name, schema)
         .execute()
@@ -109,7 +109,7 @@ pub(crate) async fn create_table_if_not_exists(
         )
     })?;
 
-    validate_knowledge_schema(&created_schema)
+    validate_ast_chunk_schema(&created_schema)
         .map_err(|e| anyhow::anyhow!("Created table '{}' has invalid schema: {}", table_name, e))?;
 
     Ok(())

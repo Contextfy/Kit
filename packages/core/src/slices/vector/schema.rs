@@ -22,26 +22,55 @@ use std::sync::Arc;
 #[allow(dead_code)]
 pub(crate) const VECTOR_DIM: i32 = 384;
 
-/// Knowledge record Arrow schema
+/// AST Chunk Arrow schema for LanceDB
 ///
-/// This schema defines the structure of documents stored in LanceDB.
+/// This schema defines the structure of AST chunks stored in LanceDB.
 ///
 /// # Fields
 ///
-/// - `id`: Unique record identifier (Utf8, non-null)
-/// - `title`: Record title (Utf8, non-null)
-/// - `summary`: Content summary for Scout retrieval (Utf8, non-null)
-/// - `content`: Full content for Inspect retrieval (Utf8, non-null)
+/// - `id`: Unique chunk identifier (Utf8, non-null) - hash signature
+/// - `file_path`: File path (Utf8, non-null) - e.g., `src/auth.rs`
+/// - `symbol_name`: Symbol name (Utf8, non-null) - e.g., `AuthManager` (highest BM25 weight)
+/// - `node_type`: Node type (Utf8, non-null) - e.g., `class`, `function`
+/// - `content`: Full code block/AST content (Utf8, non-null)
+/// - `dependencies`: Dependencies as comma-separated string (Utf8, nullable) - avoids Arrow ListArray
 /// - `vector`: Vector embedding (384-dim FixedSizeList(Float32), non-null)
-/// - `keywords`: JSON-serialized keyword array (Utf8, nullable)
-/// - `source_path`: Original file path (Utf8, non-null)
 ///
 /// # Invariants
 ///
 /// - Vector dimension must match `VECTOR_DIM` constant
 /// - Vector elements must be Float32
-/// - Only `keywords` field is nullable
+/// - Only `dependencies` field is nullable
+/// - Dependencies are serialized as comma-separated strings to avoid Arrow ListArray complexity
 #[allow(dead_code)]
+pub(crate) fn ast_chunk_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("file_path", DataType::Utf8, false),
+        Field::new("symbol_name", DataType::Utf8, false),
+        Field::new("node_type", DataType::Utf8, false),
+        Field::new("content", DataType::Utf8, false),
+        // dependencies: comma-separated string (nullable) to avoid Arrow ListArray complexity
+        Field::new("dependencies", DataType::Utf8, true),
+        // vector: 384-dim Float32 fixed-size list
+        Field::new(
+            "vector",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                VECTOR_DIM,
+            ),
+            false,
+        ),
+    ])
+}
+
+/// Knowledge record Arrow schema (legacy, for backward compatibility)
+///
+/// # DEPRECATED
+/// This schema is deprecated in favor of `ast_chunk_schema()`.
+/// It is kept for backward compatibility during migration.
+#[allow(dead_code)]
+#[deprecated(note = "Use ast_chunk_schema() instead")]
 pub(crate) fn knowledge_record_schema() -> Schema {
     Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
@@ -63,7 +92,7 @@ pub(crate) fn knowledge_record_schema() -> Schema {
     ])
 }
 
-/// Validate that a schema matches the expected knowledge record schema
+/// Validate that a schema matches the expected AST chunk schema
 ///
 /// This is used to verify that an existing LanceDB table is compatible
 /// with our expected schema.
@@ -76,6 +105,69 @@ pub(crate) fn knowledge_record_schema() -> Schema {
 ///
 /// * `Ok(())` - Schema is valid
 /// * `Err(String)` - Schema validation failed with descriptive message
+pub fn validate_ast_chunk_schema(schema: &Schema) -> Result<(), String> {
+    let expected = ast_chunk_schema();
+
+    // Check field count
+    if schema.fields().len() != expected.fields().len() {
+        return Err(format!(
+            "Field count mismatch: expected {}, got {}",
+            expected.fields().len(),
+            schema.fields().len()
+        ));
+    }
+
+    // Validate each field comprehensively
+    for (idx, expected_field) in expected.fields().iter().enumerate() {
+        // Get actual field by index (first ensure we have enough fields)
+        let actual_field = schema.fields().get(idx).ok_or_else(|| {
+            format!(
+                "Missing field at index {}: '{}'",
+                idx,
+                expected_field.name()
+            )
+        })?;
+
+        // Validate field name
+        if actual_field.name() != expected_field.name() {
+            return Err(format!(
+                "Field name mismatch at index {}: expected '{}', got '{}'",
+                idx,
+                expected_field.name(),
+                actual_field.name()
+            ));
+        }
+
+        // Validate data type
+        if actual_field.data_type() != expected_field.data_type() {
+            return Err(format!(
+                "Data type mismatch for field '{}': expected {:?}, got {:?}",
+                actual_field.name(),
+                expected_field.data_type(),
+                actual_field.data_type()
+            ));
+        }
+
+        // Validate nullable flag
+        if actual_field.is_nullable() != expected_field.is_nullable() {
+            return Err(format!(
+                "Nullable flag mismatch for field '{}': expected {}, got {}",
+                actual_field.name(),
+                expected_field.is_nullable(),
+                actual_field.is_nullable()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate that a schema matches the expected knowledge record schema
+///
+/// # DEPRECATED
+/// This function is deprecated in favor of `validate_ast_chunk_schema()`.
+/// It is kept for backward compatibility during migration.
+#[deprecated(note = "Use validate_ast_chunk_schema() instead")]
 pub fn validate_knowledge_schema(schema: &Schema) -> Result<(), String> {
     let expected = knowledge_record_schema();
 

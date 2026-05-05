@@ -9,7 +9,7 @@
 //! Ref: `openspec/changes/refactor-pragmatic-slice-architecture/design.md` - Rule 2
 
 use crate::kernel::errors::AppError;
-use crate::kernel::types::{Hit, Query};
+use crate::kernel::types::{AstChunk, Hit, Query};
 use async_trait::async_trait;
 
 /// Vector store trait
@@ -144,6 +144,24 @@ pub trait VectorStoreTrait: Send + Sync {
     /// * `Ok(false)` - Store is unhealthy but not an error
     /// * `Err(AppError)` - Infrastructure error (connection failed, etc.)
     async fn health_check(&self) -> Result<bool, AppError>;
+
+    /// Batch add AST chunks to the vector store
+    ///
+    /// # Performance Requirements
+    ///
+    /// - **Vector generation**: MUST use `embed_batch()` for all chunks at once
+    /// - **Database write**: Use `RecordBatchIterator` for batch insertion
+    /// - **NEVER** call `embed_text()` in a loop
+    ///
+    /// # Parameters
+    ///
+    /// * `chunks` - AST chunk list
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Batch add successful
+    /// * `Err(AppError)` - Batch add failed
+    async fn add_batch(&self, chunks: Vec<AstChunk>) -> Result<(), AppError>;
 }
 
 #[cfg(test)]
@@ -217,6 +235,16 @@ mod tests {
                 )));
             }
             Ok(true)
+        }
+
+        async fn add_batch(&self, _chunks: Vec<AstChunk>) -> Result<(), AppError> {
+            if self.should_fail {
+                return Err(AppError::Infra(InfraError::database(
+                    "mock batch insert failed",
+                    None::<std::io::Error>,
+                )));
+            }
+            Ok(())
         }
     }
 

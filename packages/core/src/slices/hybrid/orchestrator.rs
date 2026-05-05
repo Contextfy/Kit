@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use crate::kernel::errors::{AppError, DomainError};
-use crate::kernel::types::{Hit, Query};
+use crate::kernel::types::{AstChunk, Hit, Query};
 
 use super::super::bm25::Bm25StoreTrait;
 use super::super::vector::VectorStoreTrait;
@@ -249,10 +249,11 @@ impl HybridOrchestrator {
         content: &str,
         keywords: Option<&str>,
     ) -> Result<(), AppError> {
-        // Construct metadata for vector store with title and summary
+        // Construct metadata for vector store with title, summary, and keywords
         let metadata = serde_json::json!({
             "title": title,
-            "summary": summary
+            "summary": summary,
+            "keywords": keywords.unwrap_or("")
         });
 
         // Add to both stores in parallel
@@ -314,6 +315,98 @@ impl HybridOrchestrator {
                     bm25_error = ?bm25_err,
                     "Both stores failed to add document"
                 );
+                Err(vector_err)
+            }
+        }
+    }
+
+    /// Batch add AST chunks to both stores
+    ///
+    /// This method adds multiple AST chunks to both vector and BM25 stores concurrently.
+    ///
+    /// # Performance
+    ///
+    /// - VectorStore and Bm25Store execute concurrently
+    /// - Uses `tokio::try_join!` to wait for both backends
+    ///
+    /// # Parameters
+    ///
+    /// * `chunks` - AST chunk list
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Both backends succeeded
+    /// * `Err(AppError)` - At least one backend failed
+    pub async fn add_batch(&self, chunks: Vec<AstChunk>) -> Result<(), AppError> {
+        if chunks.is_empty() {
+            return Ok(());
+        }
+
+        let chunk_count = chunks.len();
+        info!("Adding {} chunks to hybrid stores", chunk_count);
+
+        // Extract all IDs before concurrent execution for potential rollback
+        let ids: Vec<String> = chunks.iter().map(|c| c.id.clone()).collect();
+
+        // Execute batch add on both stores concurrently (use join! instead of try_join!)
+        // Clone only once for bm25_store to avoid memory bloat
+        let bm25_chunks = chunks.clone();
+        let (vector_result, bm25_result) = tokio::join!(
+            self.vector_store.add_batch(chunks),
+            self.bm25_store.add_batch(bm25_chunks),
+        );
+
+        // Handle all four states with compensating rollback to prevent orphan data
+        match (vector_result, bm25_result) {
+            (Ok(()), Ok(())) => {
+                info!(
+                    "Batch add completed successfully for {} chunks",
+                    chunk_count
+                );
+                Ok(())
+            }
+            (Ok(()), Err(bm25_err)) => {
+                // Vector store succeeded but BM25 failed: rollback vector store
+                warn!(
+                    "BM25 store failed after vector store succeeded, rolling back vector store",
+                );
+                for id in &ids {
+                    if let Err(del_err) = self.vector_store.delete(id).await {
+                        error!(
+                            id = %id,
+                            error = ?del_err,
+                            "Failed to rollback vector store during compensation"
+                        );
+                    }
+                }
+                error!(error = ?bm25_err, "BM25 store failed to add batch");
+                Err(bm25_err)
+            }
+            (Err(vector_err), Ok(())) => {
+                // BM25 store succeeded but vector failed: rollback BM25 store
+                warn!(
+                    "Vector store failed after BM25 store succeeded, rolling back BM25 store",
+                );
+                for id in &ids {
+                    if let Err(del_err) = self.bm25_store.delete(id).await {
+                        error!(
+                            id = %id,
+                            error = ?del_err,
+                            "Failed to rollback BM25 store during compensation"
+                        );
+                    }
+                }
+                error!(error = ?vector_err, "Vector store failed to add batch");
+                Err(vector_err)
+            }
+            (Err(vector_err), Err(bm25_err)) => {
+                // Both stores failed: no need to rollback, return vector error
+                error!(
+                    vector_error = ?vector_err,
+                    bm25_error = ?bm25_err,
+                    "Both stores failed to add batch"
+                );
+                // Return vector error as primary (could also create a combined error)
                 Err(vector_err)
             }
         }
@@ -465,6 +558,17 @@ mod tests {
             }
         }
 
+        async fn add_batch(&self, _chunks: Vec<AstChunk>) -> Result<(), AppError> {
+            if self.add_should_fail {
+                Err(AppError::Infra(InfraError::database(
+                    "mock vector add_batch failed",
+                    None::<std::io::Error>,
+                )))
+            } else {
+                Ok(())
+            }
+        }
+
         async fn delete(&self, _id: &str) -> Result<bool, AppError> {
             if self.delete_should_fail {
                 Err(AppError::Infra(InfraError::database(
@@ -505,14 +609,14 @@ mod tests {
             let results = vec![
                 Bm25Result::new(
                     "bm25-doc1".to_string(),
-                    "Title 1".to_string(),
-                    "Summary 1".to_string(),
+                    "Symbol1".to_string(),
+                    "path1.rs".to_string(),
                     Score::new(0.9),
                 ),
                 Bm25Result::new(
                     "bm25-doc2".to_string(),
-                    "Title 2".to_string(),
-                    "Summary 2".to_string(),
+                    "Symbol2".to_string(),
+                    "path2.rs".to_string(),
                     Score::new(0.8),
                 ),
             ];
@@ -530,6 +634,17 @@ mod tests {
             if self.add_should_fail {
                 Err(AppError::Infra(InfraError::database(
                     "mock BM25 add failed",
+                    None::<std::io::Error>,
+                )))
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn add_batch(&self, _chunks: Vec<AstChunk>) -> Result<(), AppError> {
+            if self.add_should_fail {
+                Err(AppError::Infra(InfraError::database(
+                    "mock BM25 add_batch failed",
                     None::<std::io::Error>,
                 )))
             } else {
