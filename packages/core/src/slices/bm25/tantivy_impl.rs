@@ -216,11 +216,11 @@ impl Bm25StoreTrait for TantivyBm25Store {
                     .context("Failed to retrieve document")?;
 
                 let id = Self::extract_text_value(&retrieved_doc, id_field);
-                let title = Self::extract_text_value(&retrieved_doc, symbol_name_field);
-                let summary = Self::extract_text_value(&retrieved_doc, file_path_field);
+                let symbol_name = Self::extract_text_value(&retrieved_doc, symbol_name_field);
+                let file_path = Self::extract_text_value(&retrieved_doc, file_path_field);
                 let score = Self::normalize_score(bm25_score);
 
-                results.push(Bm25Result::new(id, title, summary, score));
+                results.push(Bm25Result::new(id, symbol_name, file_path, score));
             }
 
             Ok::<Vec<Bm25Result>, anyhow::Error>(results)
@@ -495,15 +495,15 @@ impl Bm25StoreTrait for TantivyBm25Store {
 
             // Extract document fields
             let doc_id = Self::extract_text_value(&retrieved_doc, id_field);
-            let title = Self::extract_text_value(&retrieved_doc, symbol_name_field);
-            let summary = Self::extract_text_value(&retrieved_doc, file_path_field);
+            let symbol_name = Self::extract_text_value(&retrieved_doc, symbol_name_field);
+            let file_path = Self::extract_text_value(&retrieved_doc, file_path_field);
             let content = Self::extract_text_value(&retrieved_doc, content_field);
 
             // Return result with content and default score (not relevant for get_by_id)
             Ok(Some(Bm25Result::with_content(
                 doc_id,
-                title,
-                summary,
+                symbol_name,
+                file_path,
                 content,
                 Score::new(1.0),
             )))
@@ -590,13 +590,13 @@ impl Bm25StoreTrait for TantivyBm25Store {
                     .context("Failed to retrieve document")?;
 
                 let doc_id = Self::extract_text_value(&retrieved_doc, id_field);
-                let title = Self::extract_text_value(&retrieved_doc, symbol_name_field);
-                let summary = Self::extract_text_value(&retrieved_doc, file_path_field);
+                let symbol_name = Self::extract_text_value(&retrieved_doc, symbol_name_field);
+                let file_path = Self::extract_text_value(&retrieved_doc, file_path_field);
                 let content = Self::extract_text_value(&retrieved_doc, content_field);
 
                 doc_map.insert(
                     doc_id.clone(),
-                    Bm25Result::with_content(doc_id, title, summary, content, Score::new(1.0)),
+                    Bm25Result::with_content(doc_id, symbol_name, file_path, content, Score::new(1.0)),
                 );
             }
 
@@ -768,7 +768,7 @@ mod tests {
         let results = result.unwrap().unwrap();
         assert!(!results.is_empty());
         assert_eq!(results[0].id, "doc-1");
-        assert_eq!(results[0].title, "Rust Programming");
+        assert_eq!(results[0].symbol_name, "Rust Programming");
     }
 
     #[tokio::test]
@@ -848,8 +848,8 @@ mod tests {
 
         let doc = result.unwrap();
         assert_eq!(doc.id, "doc-1");
-        assert_eq!(doc.title, "Rust Programming");
-        assert_eq!(doc.summary, "A comprehensive guide to Rust");
+        assert_eq!(doc.symbol_name, "Rust Programming");
+        assert_eq!(doc.file_path, "A comprehensive guide to Rust");
         assert_eq!(
             doc.content,
             Some(

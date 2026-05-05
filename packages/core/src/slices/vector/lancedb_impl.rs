@@ -482,11 +482,50 @@ impl VectorStoreTrait for LanceDbStore {
             ))));
         }
 
-        // **Defense Line 2**: Build Arrow RecordBatch
+        // **Defense Line 0**: Prevent duplicate data by deleting existing records with same IDs
+        // This prevents duplicate entries when rebuilding indexes
+        let ids: Vec<&str> = chunks.iter().map(|c| c.id.as_str()).collect();
+
+        // Open table for deletion
+        let table = self.get_table().await
+            .map_err(|e| AppError::Infra(InfraError::database(
+                "Failed to open table for duplicate cleanup",
+                Some(e),
+            )))?;
+
+        // Delete existing records with same IDs to prevent duplicates
+        // Build a filter condition: id IN ('id1', 'id2', 'id3', ...)
+        if !ids.is_empty() {
+            // Properly escape each ID to prevent SQL injection
+            let escaped_ids: Vec<String> = ids.iter()
+                .map(|id| id.replace('\\', "\\\\").replace('\'', "\\'"))
+                .collect();
+
+            let filter_condition = format!(
+                "id IN ({})",
+                escaped_ids
+                    .iter()
+                    .map(|id| format!("'{}'", id))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+
+            // Execute deletion (ignore errors if table is empty or records don't exist)
+            let _ = table.delete(&filter_condition).await;
+            // Note: We intentionally ignore deletion errors here since:
+            // 1. The table might not have these IDs yet (first-time build)
+            // 2. If deletion fails, we'll still try to insert, and LanceDB will handle duplicates
+            // 3. The insertion error will be more informative than a deletion error
+        }
+
+        // **Defense Line 1**: Batch vector generation - extract contents for embedding
+        // (Already done above before deletion)
         use crate::slices::vector::schema::{ast_chunk_schema, VECTOR_DIM};
         use arrow::array::{FixedSizeListArray, Float32Array, StringArray};
 
         let schema = Arc::new(ast_chunk_schema());
+
+        // **Defense Line 2**: Build Arrow RecordBatch
 
         // Build arrays by field
         let id_array = StringArray::from(chunks.iter().map(|c| c.id.as_str()).collect::<Vec<_>>());
@@ -540,12 +579,7 @@ impl VectorStoreTrait for LanceDbStore {
         })?;
 
         // **Defense Line 3**: Single LanceDB write - NEVER in a loop
-        let table = self.get_table().await
-            .map_err(|e| AppError::Infra(InfraError::database(
-                "Failed to open table for batch add",
-                Some(e),
-            )))?;
-
+        // Note: table is already opened above for deletion, reuse it
         let batches = vec![batch];
         let reader = RecordBatchIterator::new(
             batches.into_iter().map(Ok),

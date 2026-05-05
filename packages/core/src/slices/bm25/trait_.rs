@@ -18,10 +18,10 @@ use crate::kernel::types::{AstChunk, Hit, Query, Score};
 pub struct Bm25Result {
     /// Document ID
     pub id: String,
-    /// Document title
-    pub title: String,
-    /// Document summary
-    pub summary: String,
+    /// Symbol name (highest BM25 weight field)
+    pub symbol_name: String,
+    /// File path
+    pub file_path: String,
     /// Document content (optional, only populated when retrieved via get_by_id)
     pub content: Option<String>,
     /// BM25 relevance score
@@ -30,11 +30,11 @@ pub struct Bm25Result {
 
 impl Bm25Result {
     /// Create a new BM25 result (without content - for search results)
-    pub fn new(id: String, title: String, summary: String, score: Score) -> Self {
+    pub fn new(id: String, symbol_name: String, file_path: String, score: Score) -> Self {
         Self {
             id,
-            title,
-            summary,
+            symbol_name,
+            file_path,
             content: None,
             score,
         }
@@ -43,15 +43,15 @@ impl Bm25Result {
     /// Create a new BM25 result with full content (for get_by_id results)
     pub fn with_content(
         id: String,
-        title: String,
-        summary: String,
+        symbol_name: String,
+        file_path: String,
         content: String,
         score: Score,
     ) -> Self {
         Self {
             id,
-            title,
-            summary,
+            symbol_name,
+            file_path,
             content: Some(content),
             score,
         }
@@ -254,14 +254,14 @@ mod tests {
     async fn test_bm25_result_creation() {
         let result = Bm25Result::new(
             "test-id".to_string(),
-            "Test Title".to_string(),
-            "Test Summary".to_string(),
+            "Test Symbol".to_string(),
+            "test/file.rs".to_string(),
             Score::new(0.9),
         );
 
         assert_eq!(result.id, "test-id");
-        assert_eq!(result.title, "Test Title");
-        assert_eq!(result.summary, "Test Summary");
+        assert_eq!(result.symbol_name, "Test Symbol");
+        assert_eq!(result.file_path, "test/file.rs");
         assert_eq!(result.score.value(), 0.9);
     }
 
@@ -269,8 +269,8 @@ mod tests {
     async fn test_bm25_result_to_hit() {
         let result = Bm25Result::new(
             "test-id".to_string(),
-            "Test Title".to_string(),
-            "Test Summary".to_string(),
+            "Test Symbol".to_string(),
+            "test/file.rs".to_string(),
             Score::new(0.8),
         );
 

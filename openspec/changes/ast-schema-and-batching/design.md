@@ -187,16 +187,25 @@ AstChunk {
 3. 确认新 Schema 正确
 
 ### 阶段 3: 数据迁移
-1. **选项 A**：重建索引（推荐，简单）
-   ```bash
-   rm -rf data/lancedb data/tantivy
-   cargo run --bin contextfy-cli -- build
-   ```
+**手动重建索引**（Manual rebuild only）
 
-2. **选项 B**：迁移工具（复杂，保留数据）
-   ```bash
-   cargo run --bin migration-tool -- migrate-to-ast
-   ```
+由于架构决策明确不实现自动迁移工具（Non-Goals），数据迁移采用手动重建索引的方式：
+
+```bash
+# 1. 停止所有写入操作
+# 2. 备份现有索引（可选）
+cp -r data/lancedb data/lancedb.backup
+cp -r data/tantivy data/tantivy.backup
+
+# 3. 清空旧索引
+rm -rf data/lancedb data/tantivy
+
+# 4. 重建索引（使用新 Schema）
+cargo run --bin contextfy-cli -- build
+
+# 5. 验证新索引
+cargo test
+```
 
 ### 阶段 4: 验证
 1. 运行测试套件（`cargo test`）

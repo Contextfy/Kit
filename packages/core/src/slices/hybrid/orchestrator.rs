@@ -343,22 +343,69 @@ impl HybridOrchestrator {
 
         info!("Adding {} chunks to hybrid stores", chunks.len());
 
-        // Execute batch add on both stores concurrently
-        let (vector_result, bm25_result) = tokio::try_join!(
-            self.vector_store.add_batch(chunks.clone()),
-            self.bm25_store.add_batch(chunks),
-        )
-        .map_err(|e| {
-            error!(error = ?e, "Both stores failed to add batch");
-            e
-        })?;
+        // Extract all IDs before concurrent execution for potential rollback
+        let ids: Vec<String> = chunks.iter().map(|c| c.id.clone()).collect();
 
-        info!(
-            "Batch add completed: vector={:?}, bm25={:?}",
-            vector_result, bm25_result
+        // Execute batch add on both stores concurrently (use join! instead of try_join!)
+        let (vector_result, bm25_result) = tokio::join!(
+            self.vector_store.add_batch(chunks.clone()),
+            self.bm25_store.add_batch(chunks.clone()),
         );
 
-        Ok(())
+        // Handle all four states with compensating rollback to prevent orphan data
+        match (vector_result, bm25_result) {
+            (Ok(()), Ok(())) => {
+                info!(
+                    "Batch add completed successfully for {} chunks",
+                    chunks.len()
+                );
+                Ok(())
+            }
+            (Ok(()), Err(bm25_err)) => {
+                // Vector store succeeded but BM25 failed: rollback vector store
+                warn!(
+                    "BM25 store failed after vector store succeeded, rolling back vector store",
+                );
+                for id in &ids {
+                    if let Err(del_err) = self.vector_store.delete(id).await {
+                        error!(
+                            id = %id,
+                            error = ?del_err,
+                            "Failed to rollback vector store during compensation"
+                        );
+                    }
+                }
+                error!(error = ?bm25_err, "BM25 store failed to add batch");
+                Err(bm25_err)
+            }
+            (Err(vector_err), Ok(())) => {
+                // BM25 store succeeded but vector failed: rollback BM25 store
+                warn!(
+                    "Vector store failed after BM25 store succeeded, rolling back BM25 store",
+                );
+                for id in &ids {
+                    if let Err(del_err) = self.bm25_store.delete(id).await {
+                        error!(
+                            id = %id,
+                            error = ?del_err,
+                            "Failed to rollback BM25 store during compensation"
+                        );
+                    }
+                }
+                error!(error = ?vector_err, "Vector store failed to add batch");
+                Err(vector_err)
+            }
+            (Err(vector_err), Err(bm25_err)) => {
+                // Both stores failed: no need to rollback, return vector error
+                error!(
+                    vector_error = ?vector_err,
+                    bm25_error = ?bm25_err,
+                    "Both stores failed to add batch"
+                );
+                // Return vector error as primary (could also create a combined error)
+                Err(vector_err)
+            }
+        }
     }
 
     /// Delete a document from both stores
@@ -558,14 +605,14 @@ mod tests {
             let results = vec![
                 Bm25Result::new(
                     "bm25-doc1".to_string(),
-                    "Title 1".to_string(),
-                    "Summary 1".to_string(),
+                    "Symbol1".to_string(),
+                    "path1.rs".to_string(),
                     Score::new(0.9),
                 ),
                 Bm25Result::new(
                     "bm25-doc2".to_string(),
-                    "Title 2".to_string(),
-                    "Summary 2".to_string(),
+                    "Symbol2".to_string(),
+                    "path2.rs".to_string(),
                     Score::new(0.8),
                 ),
             ];
