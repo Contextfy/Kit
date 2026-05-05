@@ -316,9 +316,12 @@ impl SearchEngine {
             .map(|opt_result| {
                 opt_result.map(|r| DocumentDetails {
                     id: r.id,
-                    symbol_name: r.symbol_name,
-                    file_path: r.file_path,
+                    symbol_name: r.symbol_name.clone(),
+                    file_path: r.file_path.clone(),
                     content: r.content,
+                    // Legacy fields for backward compatibility
+                    title: r.symbol_name,
+                    summary: r.file_path,
                 })
             })
     }
@@ -352,9 +355,12 @@ impl SearchEngine {
             .map(|opt_result| {
                 opt_result.map(|r| DocumentDetails {
                     id: r.id,
-                    symbol_name: r.symbol_name,
-                    file_path: r.file_path,
+                    symbol_name: r.symbol_name.clone(),
+                    file_path: r.file_path.clone(),
                     content: r.content,
+                    // Legacy fields for backward compatibility
+                    title: r.symbol_name,
+                    summary: r.file_path,
                 })
             })
             .collect())
@@ -377,6 +383,12 @@ pub struct DocumentDetails {
     pub file_path: String,
     /// Full document content (None indicates data integrity issue)
     pub content: Option<String>,
+    /// Legacy field: title (backward compatibility alias for symbol_name)
+    #[deprecated(note = "Use `symbol_name` instead")]
+    pub title: String,
+    /// Legacy field: summary (backward compatibility alias for file_path)
+    #[deprecated(note = "Use `file_path` instead")]
+    pub summary: String,
 }
 
 #[cfg(test)]

@@ -249,10 +249,11 @@ impl HybridOrchestrator {
         content: &str,
         keywords: Option<&str>,
     ) -> Result<(), AppError> {
-        // Construct metadata for vector store with title and summary
+        // Construct metadata for vector store with title, summary, and keywords
         let metadata = serde_json::json!({
             "title": title,
-            "summary": summary
+            "summary": summary,
+            "keywords": keywords.unwrap_or("")
         });
 
         // Add to both stores in parallel
@@ -341,15 +342,18 @@ impl HybridOrchestrator {
             return Ok(());
         }
 
-        info!("Adding {} chunks to hybrid stores", chunks.len());
+        let chunk_count = chunks.len();
+        info!("Adding {} chunks to hybrid stores", chunk_count);
 
         // Extract all IDs before concurrent execution for potential rollback
         let ids: Vec<String> = chunks.iter().map(|c| c.id.clone()).collect();
 
         // Execute batch add on both stores concurrently (use join! instead of try_join!)
+        // Clone only once for bm25_store to avoid memory bloat
+        let bm25_chunks = chunks.clone();
         let (vector_result, bm25_result) = tokio::join!(
-            self.vector_store.add_batch(chunks.clone()),
-            self.bm25_store.add_batch(chunks.clone()),
+            self.vector_store.add_batch(chunks),
+            self.bm25_store.add_batch(bm25_chunks),
         );
 
         // Handle all four states with compensating rollback to prevent orphan data
@@ -357,7 +361,7 @@ impl HybridOrchestrator {
             (Ok(()), Ok(())) => {
                 info!(
                     "Batch add completed successfully for {} chunks",
-                    chunks.len()
+                    chunk_count
                 );
                 Ok(())
             }

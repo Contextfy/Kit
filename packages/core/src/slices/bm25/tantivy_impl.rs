@@ -644,45 +644,56 @@ impl Bm25StoreTrait for TantivyBm25Store {
         let index_clone = self.index.clone();
 
         tokio::task::spawn_blocking(move || {
-            let schema = index_clone.schema();
+            // Use a separate scope to ensure rollback happens on any error
+            let result: Result<(), anyhow::Error> = (|| {
+                let schema = index_clone.schema();
 
-            // Get field references
-            let id_field = schema.get_field(FIELD_ID).context("Missing id field")?;
-            let file_path_field = schema.get_field(FIELD_FILE_PATH).context("Missing file_path field")?;
-            let symbol_name_field = schema.get_field(FIELD_SYMBOL_NAME).context("Missing symbol_name field")?;
-            let node_type_field = schema.get_field(FIELD_NODE_TYPE).context("Missing node_type field")?;
-            let content_field = schema.get_field(FIELD_CONTENT).context("Missing content field")?;
-            let dependencies_field = schema.get_field(FIELD_DEPENDENCIES).context("Missing dependencies field")?;
+                // Get field references
+                let id_field = schema.get_field(FIELD_ID).context("Missing id field")?;
+                let file_path_field = schema.get_field(FIELD_FILE_PATH).context("Missing file_path field")?;
+                let symbol_name_field = schema.get_field(FIELD_SYMBOL_NAME).context("Missing symbol_name field")?;
+                let node_type_field = schema.get_field(FIELD_NODE_TYPE).context("Missing node_type field")?;
+                let content_field = schema.get_field(FIELD_CONTENT).context("Missing content field")?;
+                let dependencies_field = schema.get_field(FIELD_DEPENDENCIES).context("Missing dependencies field")?;
 
-            let mut writer = writer_clone.blocking_lock();
+                let mut writer = writer_clone.blocking_lock();
 
-            // **Defense Line**: Single transaction batch add
-            for chunk in chunks {
-                // Upsert: Delete existing document with same ID first
-                let term = tantivy::Term::from_field_text(id_field, &chunk.id);
-                writer.delete_term(term);
+                // **Defense Line**: Single transaction batch add
+                for chunk in &chunks {
+                    // Upsert: Delete existing document with same ID first
+                    let term = tantivy::Term::from_field_text(id_field, &chunk.id);
+                    writer.delete_term(term);
 
-                // Create document
-                let mut doc = TantivyDocument::new();
-                doc.add_text(id_field, &chunk.id);
-                doc.add_text(file_path_field, &chunk.file_path);
-                doc.add_text(symbol_name_field, &chunk.symbol_name);
-                doc.add_text(node_type_field, &chunk.node_type);
-                doc.add_text(content_field, &chunk.content);
+                    // Create document
+                    let mut doc = TantivyDocument::new();
+                    doc.add_text(id_field, &chunk.id);
+                    doc.add_text(file_path_field, &chunk.file_path);
+                    doc.add_text(symbol_name_field, &chunk.symbol_name);
+                    doc.add_text(node_type_field, &chunk.node_type);
+                    doc.add_text(content_field, &chunk.content);
 
-                // Dependencies: Multi-value field - add each dependency separately
-                for dep in &chunk.dependencies {
-                    doc.add_text(dependencies_field, dep);
+                    // Dependencies: Multi-value field - add each dependency separately
+                    for dep in &chunk.dependencies {
+                        doc.add_text(dependencies_field, dep);
+                    }
+
+                    writer.add_document(doc)
+                        .context("Failed to add document to batch")?;
                 }
 
-                writer.add_document(doc)
-                    .context("Failed to add document to batch")?;
+                // **Defense Line**: Single commit - NEVER in a loop
+                writer.commit().context("Failed to commit batch")?;
+
+                Ok(())
+            })();
+
+            // If the operation failed, rollback to clear in-memory state
+            if result.is_err() {
+                let mut writer = writer_clone.blocking_lock();
+                let _ = writer.rollback(); // Best-effort rollback, ignore errors
             }
 
-            // **Defense Line**: Single commit - NEVER in a loop
-            writer.commit().context("Failed to commit batch")?;
-
-            Ok::<(), anyhow::Error>(())
+            result
         })
         .await
         .map_err(|e| {
@@ -918,5 +929,98 @@ mod tests {
             "doc-1",
             "Second result should be doc-1"
         );
+    }
+
+    #[tokio::test]
+    async fn test_add_batch_happy_path() {
+        let (store, _temp_dir) = create_test_store().await;
+
+        use crate::kernel::types::AstChunk;
+        let chunks = vec![
+            AstChunk {
+                id: "batch-doc-1".to_string(),
+                file_path: "src/auth.rs".to_string(),
+                symbol_name: "AuthManager".to_string(),
+                node_type: "class".to_string(),
+                content: "class AuthManager { ... }".to_string(),
+                dependencies: vec!["User".to_string()],
+                vector: None,
+            },
+            AstChunk {
+                id: "batch-doc-2".to_string(),
+                file_path: "src/user.rs".to_string(),
+                symbol_name: "User".to_string(),
+                node_type: "class".to_string(),
+                content: "class User { ... }".to_string(),
+                dependencies: vec![],
+                vector: None,
+            },
+        ];
+
+        // Add batch
+        let result = store.add_batch(chunks).await;
+        assert!(result.is_ok(), "Batch add should succeed");
+
+        // Verify by searching for one of the symbols
+        let query = Query::new("AuthManager", 10);
+        let search_result = store.search(&query).await;
+
+        assert!(search_result.is_ok());
+        let results = search_result.unwrap().unwrap();
+        assert!(!results.is_empty(), "Should find the added batch documents");
+        assert_eq!(results[0].id, "batch-doc-1");
+    }
+
+    #[tokio::test]
+    async fn test_add_batch_empty() {
+        let (store, _temp_dir) = create_test_store().await;
+
+        // Empty batch should succeed immediately
+        let result = store.add_batch(vec![]).await;
+        assert!(result.is_ok(), "Empty batch add should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_add_batch_rollback_on_duplicate_id() {
+        let (store, _temp_dir) = create_test_store().await;
+
+        use crate::kernel::types::AstChunk;
+
+        // Add first batch
+        let chunks1 = vec![AstChunk {
+            id: "rollback-test".to_string(),
+            file_path: "src/test.rs".to_string(),
+            symbol_name: "TestFunc".to_string(),
+            node_type: "function".to_string(),
+            content: "fn test() {}".to_string(),
+            dependencies: vec![],
+            vector: None,
+        }];
+
+        store.add_batch(chunks1).await.expect("First batch should succeed");
+
+        // Verify first insertion
+        let query = Query::new("TestFunc", 10);
+        let results1 = store.search(&query).await.unwrap().unwrap();
+        assert_eq!(results1.len(), 1);
+
+        // Add second batch with same ID (upsert test)
+        let chunks2 = vec![AstChunk {
+            id: "rollback-test".to_string(),
+            file_path: "src/test.rs".to_string(),
+            symbol_name: "TestFuncUpdated".to_string(),
+            node_type: "function".to_string(),
+            content: "fn test() { updated }".to_string(),
+            dependencies: vec![],
+            vector: None,
+        }];
+
+        store.add_batch(chunks2).await.expect("Second batch with same ID should succeed (upsert)");
+
+        // Verify that only one document exists with updated content
+        let query2 = Query::new("TestFuncUpdated", 10);
+        let results2 = store.search(&query2).await.unwrap().unwrap();
+        assert_eq!(results2.len(), 1, "Should have exactly one document after upsert");
+        assert_eq!(results2[0].id, "rollback-test");
     }
 }
