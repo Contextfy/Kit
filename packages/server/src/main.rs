@@ -227,7 +227,7 @@ async fn document_handler(
             tracing::info!(doc_id = %doc_id, "Document retrieved successfully");
             Ok(Json(DocumentResponse {
                 id: doc.id,
-                title: doc.title,
+                title: doc.symbol_name,
                 content: doc.content.unwrap_or_default(),
             }))
         }
