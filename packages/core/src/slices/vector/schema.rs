@@ -168,8 +168,9 @@ pub fn validate_ast_chunk_schema(schema: &Schema) -> Result<(), String> {
 /// This function is deprecated in favor of `validate_ast_chunk_schema()`.
 /// It is kept for backward compatibility during migration.
 #[deprecated(note = "Use validate_ast_chunk_schema() instead")]
+#[allow(dead_code)]
 pub fn validate_knowledge_schema(schema: &Schema) -> Result<(), String> {
-    let expected = knowledge_record_schema();
+    let expected = ast_chunk_schema();
 
     // Check field count
     if schema.fields().len() != expected.fields().len() {
@@ -230,8 +231,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_knowledge_record_schema() {
-        let schema = knowledge_record_schema();
+    fn test_ast_chunk_schema() {
+        let schema = ast_chunk_schema();
 
         // Verify 7 fields
         assert_eq!(schema.fields().len(), 7);
@@ -273,17 +274,17 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_knowledge_schema_valid() {
-        let schema = knowledge_record_schema();
-        assert!(validate_knowledge_schema(&schema).is_ok());
+    fn test_validate_ast_chunk_schema_valid() {
+        let schema = ast_chunk_schema();
+        assert!(validate_ast_chunk_schema(&schema).is_ok());
     }
 
     #[test]
-    fn test_validate_knowledge_schema_field_count_mismatch() {
+    fn test_validate_ast_chunk_schema_field_count_mismatch() {
         // Create a schema with wrong field count
         let wrong_schema = Schema::new(vec![Field::new("id", DataType::Utf8, false)]);
 
-        let result = validate_knowledge_schema(&wrong_schema);
+        let result = validate_ast_chunk_schema(&wrong_schema);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Field count mismatch"));
     }
@@ -308,7 +309,7 @@ mod tests {
             Field::new("source_path", DataType::Utf8, false),
         ]);
 
-        let result = validate_knowledge_schema(&wrong_schema);
+        let result = validate_ast_chunk_schema(&wrong_schema);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("Data type mismatch"));
@@ -316,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_knowledge_schema_wrong_vector_type() {
+    fn test_validate_ast_chunk_schema_wrong_vector_type() {
         // Create a schema with wrong vector element type
         let wrong_schema = Schema::new(vec![
             Field::new("id", DataType::Utf8, false),
@@ -335,7 +336,7 @@ mod tests {
             Field::new("source_path", DataType::Utf8, false),
         ]);
 
-        let result = validate_knowledge_schema(&wrong_schema);
+        let result = validate_ast_chunk_schema(&wrong_schema);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("Data type mismatch"));
@@ -343,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_knowledge_schema_wrong_field_name() {
+    fn test_validate_ast_chunk_schema_wrong_field_name() {
         // Create a schema with wrong field name at index 1
         let wrong_schema = Schema::new(vec![
             Field::new("id", DataType::Utf8, false),
@@ -362,7 +363,7 @@ mod tests {
             Field::new("source_path", DataType::Utf8, false),
         ]);
 
-        let result = validate_knowledge_schema(&wrong_schema);
+        let result = validate_ast_chunk_schema(&wrong_schema);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("Field name mismatch"));
@@ -372,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_knowledge_schema_wrong_nullable_flag() {
+    fn test_validate_ast_chunk_schema_wrong_nullable_flag() {
         // Create a schema with wrong nullable flag for id field
         let wrong_schema = Schema::new(vec![
             Field::new("id", DataType::Utf8, true), // Should be non-null
@@ -391,7 +392,7 @@ mod tests {
             Field::new("source_path", DataType::Utf8, false),
         ]);
 
-        let result = validate_knowledge_schema(&wrong_schema);
+        let result = validate_ast_chunk_schema(&wrong_schema);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("Nullable flag mismatch"));
@@ -399,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_knowledge_schema_wrong_data_type() {
+    fn test_validate_ast_chunk_schema_wrong_data_type() {
         // Create a schema with wrong data type for title field
         let wrong_schema = Schema::new(vec![
             Field::new("id", DataType::Utf8, false),
@@ -418,7 +419,7 @@ mod tests {
             Field::new("source_path", DataType::Utf8, false),
         ]);
 
-        let result = validate_knowledge_schema(&wrong_schema);
+        let result = validate_ast_chunk_schema(&wrong_schema);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("Data type mismatch"));
@@ -426,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_knowledge_schema_all_fields_correct() {
+    fn test_validate_ast_chunk_schema_all_fields_correct() {
         // Create a schema that exactly matches the expected schema
         let correct_schema = Schema::new(vec![
             Field::new("id", DataType::Utf8, false),
@@ -445,7 +446,7 @@ mod tests {
             Field::new("source_path", DataType::Utf8, false),
         ]);
 
-        let result = validate_knowledge_schema(&correct_schema);
+        let result = validate_ast_chunk_schema(&correct_schema);
         assert!(
             result.is_ok(),
             "Schema validation should succeed for correct schema"

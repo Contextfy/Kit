@@ -314,6 +314,7 @@ impl SearchEngine {
             .await
             .context("Failed to get document")
             .map(|opt_result| {
+                #[allow(deprecated)]
                 opt_result.map(|r| DocumentDetails {
                     id: r.id,
                     symbol_name: r.symbol_name.clone(),
@@ -353,6 +354,7 @@ impl SearchEngine {
         Ok(results
             .into_iter()
             .map(|opt_result| {
+                #[allow(deprecated)]
                 opt_result.map(|r| DocumentDetails {
                     id: r.id,
                     symbol_name: r.symbol_name.clone(),

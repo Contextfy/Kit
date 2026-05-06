@@ -352,7 +352,7 @@ async fn create_table_if_not_exists(
             .await
             .map_err(MigrationError::LanceDbError)?;
 
-        schema::validate_knowledge_schema(&existing_schema).map_err(|e| {
+        schema::validate_ast_chunk_schema(&existing_schema).map_err(|e| {
             MigrationError::ValidationError(format!(
                 "Table '{}' schema mismatch: {}",
                 table_name, e
@@ -363,7 +363,7 @@ async fn create_table_if_not_exists(
     }
 
     // Create new table
-    let schema = std::sync::Arc::new(schema::knowledge_record_schema());
+    let schema = std::sync::Arc::new(schema::ast_chunk_schema());
     conn.create_empty_table(table_name, schema)
         .execute()
         .await

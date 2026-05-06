@@ -66,8 +66,8 @@ pub async fn scout(query: String) -> Result<()> {
                     match &docs_result {
                         Ok(docs) => {
                             if let Some(Some(doc)) = docs.get(i) {
-                                println!("    Title: {}", doc.title);
-                                println!("    Summary: {}", doc.summary);
+                                println!("    Symbol Name: {}", doc.symbol_name);
+                                println!("    File Path: {}", doc.file_path);
                             } else {
                                 println!("    (Document details not available)");
                             }
